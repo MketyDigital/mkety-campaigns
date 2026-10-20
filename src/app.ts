@@ -7,10 +7,24 @@ export type AppBindings = {
   };
   Variables: {
     databaseReady: () => Promise<boolean>;
+    tenantContext: { tenantId: string; userId: string };
   };
 };
 
-export function createApp(checkDatabase: () => Promise<boolean> = async () => false) {
+export type AuthSession = {
+  user: { id: string; role?: string; twoFactorEnabled?: boolean };
+  session: { createdAt: Date | string };
+};
+
+export type AppSecurity = {
+  auth: {
+    handler(request: Request): Response | Promise<Response>;
+    getSession(headers: Headers): Promise<AuthSession | null>;
+  };
+  resolveTenantSeat(userId: string, sessionCreatedAt: Date): Promise<string | null>;
+};
+
+export function createApp(checkDatabase: () => Promise<boolean> = async () => false, security?: AppSecurity) {
   const app = new Hono<AppBindings>();
 
   app.use("*", async (c, next) => {
@@ -65,6 +79,28 @@ export function createApp(checkDatabase: () => Promise<boolean> = async () => fa
   app.get("/readyz", async (c) => {
     const ready = await c.get("databaseReady")();
     return c.json({ status: ready ? "ready" : "not_ready" }, ready ? 200 : 503);
+  });
+
+  app.all("/api/auth/*", (c) => security
+    ? security.auth.handler(c.req.raw)
+    : c.json({ error: "auth_not_configured" }, 503));
+
+  app.use("/api/tenant/*", async (c, next) => {
+    if (!security) return c.json({ error: "auth_not_configured" }, 503);
+    const session = await security.auth.getSession(c.req.raw.headers);
+    if (!session) return c.json({ error: "unauthorized" }, 401);
+    if (!session.user.twoFactorEnabled) return c.json({ error: "mfa_required" }, 403);
+    const sessionCreatedAt = new Date(session.session.createdAt);
+    if (Number.isNaN(sessionCreatedAt.getTime())) return c.json({ error: "mfa_required" }, 403);
+    const tenantId = await security.resolveTenantSeat(session.user.id, sessionCreatedAt);
+    if (!tenantId) return c.json({ error: "active_tenant_seat_required" }, 403);
+    c.set("tenantContext", { tenantId, userId: session.user.id });
+    await next();
+  });
+
+  app.get("/api/tenant/me", (c) => {
+    const scope = c.get("tenantContext");
+    return c.json({ tenantId: scope.tenantId, userId: scope.userId });
   });
 
   app.notFound((c) => c.json({ error: "not_found" }, 404));
