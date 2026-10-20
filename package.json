@@ -1,0 +1,35 @@
+{
+  "name": "mkety-campaigns",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/node.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/node.js",
+    "admin:bootstrap": "node --env-file-if-exists=.env scripts/bootstrap-ops.mjs",
+    "test": "node --import tsx --test src/app.test.ts src/auth.test.ts src/storage/object-store.test.ts src/email/providers.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "db:migrate:pg": "node --env-file-if-exists=.env scripts/migrate-postgres.mjs",
+    "db:check-auth": "node --env-file-if-exists=.env scripts/check-auth-schema.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.900.0",
+    "@azure/storage-blob": "^12.28.0",
+    "@hono/node-server": "^1.19.0",
+    "better-auth": "^1.7.12",
+    "hono": "^4.9.0",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "@types/node": "^24.5.0",
+    "@types/pg": "^8.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.40.0"
+  }
+}
