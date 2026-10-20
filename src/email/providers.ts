@@ -1,6 +1,8 @@
 export type CampaignEmail = {
   /** Stable delivery job key used to make provider requests retry-safe where supported. */
   idempotencyKey: string;
+  /** Resolved by the server from a verified tenant sender identity, never raw client input. */
+  from: string;
   to: string[];
   subject: string;
   text?: string;
@@ -23,11 +25,9 @@ type Fetcher = typeof fetch;
 
 export function createAcsEmailProvider(config: {
   connectionString: string;
-  sender: string;
   fetcher?: Fetcher;
 }): EmailProvider {
   const parsed = parseAcsConnectionString(config.connectionString);
-  const sender = required(config.sender, "ACS_EMAIL_SENDER");
   const fetcher = config.fetcher ?? fetch;
 
   return {
@@ -36,7 +36,7 @@ export function createAcsEmailProvider(config: {
       assertMessage(message);
       const url = new URL("/emails:send?api-version=2023-03-31", parsed.endpoint);
       const body = JSON.stringify({
-        senderAddress: sender,
+        senderAddress: required(message.from, "message.from"),
         recipients: { to: message.to.map((address) => ({ address })) },
         content: {
           subject: message.subject,
@@ -105,7 +105,6 @@ export function createOciEmailProvider(config: {
   fingerprint: string;
   privateKey: string;
   compartmentOcid: string;
-  sender: string;
   fetcher?: Fetcher;
 }): EmailProvider {
   const endpoint = new URL(required(config.endpoint, "OCI_EMAIL_ENDPOINT"));
@@ -116,7 +115,6 @@ export function createOciEmailProvider(config: {
   const fingerprint = required(config.fingerprint, "OCI_EMAIL_FINGERPRINT");
   const privateKey = required(config.privateKey, "OCI_EMAIL_PRIVATE_KEY");
   const compartmentOcid = required(config.compartmentOcid, "OCI_EMAIL_COMPARTMENT_OCID");
-  const sender = required(config.sender, "OCI_EMAIL_SENDER");
   const fetcher = config.fetcher ?? fetch;
 
   return {
@@ -125,7 +123,7 @@ export function createOciEmailProvider(config: {
       assertMessage(message);
       const url = new URL("/20220926/actions/submitEmail", endpoint);
       const body = JSON.stringify({
-        sender: { senderAddress: { email: sender }, compartmentId: compartmentOcid },
+        sender: { senderAddress: { email: required(message.from, "message.from") }, compartmentId: compartmentOcid },
         recipients: { to: message.to.map((email) => ({ email })) },
         subject: message.subject,
         ...(message.text ? { bodyText: message.text } : {}),
@@ -171,7 +169,7 @@ export function createOciEmailProvider(config: {
 }
 
 export function createOptionalEmailProviders(env: Record<string, string | undefined>): EmailProvider[] {
-  const acsKeys = ["ACS_EMAIL_CONNECTION_STRING", "ACS_EMAIL_SENDER"] as const;
+  const acsKeys = ["ACS_EMAIL_CONNECTION_STRING"] as const;
   const ociKeys = [
     "OCI_EMAIL_ENDPOINT",
     "OCI_EMAIL_REGION",
@@ -180,7 +178,6 @@ export function createOptionalEmailProviders(env: Record<string, string | undefi
     "OCI_EMAIL_FINGERPRINT",
     "OCI_EMAIL_PRIVATE_KEY",
     "OCI_EMAIL_COMPARTMENT_OCID",
-    "OCI_EMAIL_SENDER",
   ] as const;
   const enabled = (name: string, keys: readonly string[]) => {
     const present = keys.filter((key) => Boolean(env[key]));
@@ -192,7 +189,7 @@ export function createOptionalEmailProviders(env: Record<string, string | undefi
 
   const providers: EmailProvider[] = [];
   if (enabled("ACS", acsKeys)) {
-    providers.push(createAcsEmailProvider({ connectionString: env.ACS_EMAIL_CONNECTION_STRING!, sender: env.ACS_EMAIL_SENDER! }));
+    providers.push(createAcsEmailProvider({ connectionString: env.ACS_EMAIL_CONNECTION_STRING! }));
   }
   if (enabled("OCI", ociKeys)) {
     providers.push(createOciEmailProvider({
@@ -203,7 +200,6 @@ export function createOptionalEmailProviders(env: Record<string, string | undefi
       fingerprint: env.OCI_EMAIL_FINGERPRINT!,
       privateKey: env.OCI_EMAIL_PRIVATE_KEY!,
       compartmentOcid: env.OCI_EMAIL_COMPARTMENT_OCID!,
-      sender: env.OCI_EMAIL_SENDER!,
     }));
   }
   return providers;
@@ -246,6 +242,7 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function assertMessage(message: CampaignEmail): void {
   if (!message.idempotencyKey.trim()) throw new Error("Email idempotency key is required");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(message.from)) throw new Error("A valid verified sender address is required");
   if (!message.to.length || message.to.some((address) => !address.includes("@"))) throw new Error("At least one valid email recipient is required");
   if (!message.subject.trim()) throw new Error("Email subject is required");
   if (!message.text && !message.html) throw new Error("Email must include plain text or HTML content");

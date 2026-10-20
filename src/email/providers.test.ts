@@ -9,6 +9,7 @@ import {
 
 const message: CampaignEmail = {
   idempotencyKey: "campaign-job-42",
+  from: "hello@tenant.example",
   to: ["person@example.net"],
   subject: "A test",
   text: "Plain text",
@@ -19,7 +20,6 @@ test("ACS provider sends a signed request and returns the accepted operation", a
   let captured: Request | undefined;
   const provider = createAcsEmailProvider({
     connectionString: "endpoint=https://example.communication.azure.com/;accesskey=YWJjZA==",
-    sender: "news@example.com",
     fetcher: async (input, init) => {
       captured = new Request(input, init);
       return new Response(JSON.stringify({ id: "op-123", status: "Running" }), {
@@ -37,7 +37,7 @@ test("ACS provider sends a signed request and returns the accepted operation", a
   assert.equal(captured.headers.get("operation-id")?.length, 36);
   const bodyText = await captured.clone().text();
   assert.deepEqual(JSON.parse(bodyText), {
-    senderAddress: "news@example.com",
+    senderAddress: "hello@tenant.example",
     recipients: { to: [{ address: "person@example.net" }] },
     content: { subject: "A test", plainText: "Plain text", html: "<p>Plain text</p>" },
     userEngagementTrackingDisabled: true,
@@ -61,7 +61,6 @@ test("OCI provider signs and submits through the HTTPS endpoint", async () => {
     fingerprint: "01:02:03:04",
     privateKey,
     compartmentOcid: "ocid1.compartment.oc1..test",
-    sender: "news@example.com",
     fetcher: async (input, init) => {
       captured = new Request(input, init);
       return new Response(JSON.stringify({ messageId: "oci-msg-123" }), { status: 202 });
@@ -78,7 +77,7 @@ test("OCI provider signs and submits through the HTTPS endpoint", async () => {
   const payload = await captured.clone().json();
   assert.deepEqual(payload, {
     sender: {
-      senderAddress: { email: "news@example.com" },
+      senderAddress: { email: "hello@tenant.example" },
       compartmentId: "ocid1.compartment.oc1..test",
     },
     recipients: { to: [{ email: "person@example.net" }] },
@@ -111,7 +110,6 @@ test("OCI provider signs and submits through the HTTPS endpoint", async () => {
 test("providers surface service failures without echoing credentials", async () => {
   const provider = createAcsEmailProvider({
     connectionString: "endpoint=https://example.communication.azure.com;accesskey=dG9wLXNlY3JldA==",
-    sender: "news@example.com",
     fetcher: async () => new Response("provider rejected request", { status: 401 }),
   });
   await assert.rejects(provider.send(message), /ACS email request failed \(401\)/);
@@ -120,10 +118,10 @@ test("providers surface service failures without echoing credentials", async () 
 
 test("email providers remain disabled without credentials and reject partial setup", () => {
   assert.deepEqual(createOptionalEmailProviders({}), []);
-  assert.throws(
-    () => createOptionalEmailProviders({ ACS_EMAIL_CONNECTION_STRING: "endpoint=https://x.communication.azure.com;accesskey=YQ==" }),
-    /missing: ACS_EMAIL_SENDER/,
-  );
+  assert.equal(createOptionalEmailProviders({
+    ACS_EMAIL_CONNECTION_STRING: "endpoint=https://x.communication.azure.com;accesskey=YQ==",
+  }).length, 1);
+  assert.throws(() => createOptionalEmailProviders({ OCI_EMAIL_ENDPOINT: "https://oci.example" }), /partially configured/);
 });
 
 async function makeTestKeyPair() {
