@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ObjectStore } from "./object-store.js";
-import { replicateObject } from "./object-store.js";
+import { createOptionalBackupStores, replicateObject } from "./object-store.js";
+
+test("backup targets stay disabled when their credentials are absent", () => {
+  assert.deepEqual(createOptionalBackupStores({}), []);
+});
+
+test("partial optional backup configuration fails visibly", () => {
+  assert.throws(
+    () => createOptionalBackupStores({ OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1" }),
+    /OCI backup storage is partially configured/,
+  );
+});
 
 test("replication reports each backup result independently", async () => {
   const primary: ObjectStore = {

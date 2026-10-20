@@ -22,9 +22,11 @@ For a future Workers/D1 deployment, copy `wrangler.jsonc.example` to `wrangler.j
 ### Storage rules
 - Use tenant-prefixed opaque object keys; never put email addresses or other customer identifiers in keys.
 - Keep R2 as the active source. Archive/backup copies go to OCI Infrequent Access and Azure Blob from an explicit background job; retries must be idempotent and recorded in `object_archive_manifest`.
-- Configure the OCI bucket with its default tier set to Infrequent Access. OCI chooses that bucket tier independently of the R2 setting.
+- OCI Object Storage buckets default to Standard or Archive, not Infrequent Access. Use a Standard bucket with an Object Lifecycle Management rule to transition the backup objects to Infrequent Access; choose the age based on retention and retrieval needs. Infrequent Access has a 31-day minimum retention and retrieval fees.
 - Do not delete the R2 primary copy until the archive and backup copies have been verified and retention policy allows deletion.
 - Keep imported contact data, consent evidence, and suppressions in the database; object storage is for staged uploads, exports, and approved campaign assets.
+
+See [Storage credential setup](docs/storage-credentials.md) for the exact values and console locations. OCI and Azure variables are optional; the app starts with R2 only.
 
 ## Inviolable boundaries
 - Independent repository, deployments, database, queues, domains, secrets and sender reputations. **Do not modify mksaas / MKETY Mail / Assist / Trading / MkLMS**.

@@ -131,3 +131,33 @@ export function createAzureBackupStore(env: NodeJS.ProcessEnv): ObjectStore {
   }
   return createAzureObjectStore(env.AZURE_STORAGE_CONNECTION_STRING, env.AZURE_STORAGE_CONTAINER);
 }
+
+/**
+ * Backup targets are optional. An absent credential group means that target is
+ * disabled; a partially configured group is an error so operators notice typos.
+ */
+export function createOptionalBackupStores(env: NodeJS.ProcessEnv): ObjectStore[] {
+  const ociKeys = [
+    "OCI_OBJECT_STORAGE_ENDPOINT",
+    "OCI_OBJECT_STORAGE_REGION",
+    "OCI_OBJECT_STORAGE_ACCESS_KEY_ID",
+    "OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY",
+    "OCI_OBJECT_STORAGE_BUCKET",
+  ] as const;
+  const azureKeys = ["AZURE_STORAGE_CONNECTION_STRING", "AZURE_STORAGE_CONTAINER"] as const;
+
+  const configured = (keys: readonly string[]) => keys.filter((key) => Boolean(env[key]));
+  const validateGroup = (name: string, keys: readonly string[]) => {
+    const present = configured(keys);
+    if (present.length && present.length !== keys.length) {
+      const missing = keys.filter((key) => !env[key]);
+      throw new Error(`${name} backup storage is partially configured; missing: ${missing.join(", ")}`);
+    }
+    return present.length === keys.length;
+  };
+
+  const stores: ObjectStore[] = [];
+  if (validateGroup("OCI", ociKeys)) stores.push(createOciArchiveStore(env));
+  if (validateGroup("Azure", azureKeys)) stores.push(createAzureBackupStore(env));
+  return stores;
+}
