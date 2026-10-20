@@ -15,7 +15,7 @@ Status: FOUNDATION IN PROGRESS (no deployment or live sending). Owner: MKETY Ops
 2. Run `npm ci`, then `npm run db:migrate:pg`, then `npm run dev`.
 3. Visit `http://localhost:3000`; `/healthz` checks the process and `/readyz` checks PostgreSQL.
 
-For Coolify, build from the repo `Dockerfile`, set the same runtime variables as Coolify secrets, attach the existing PostgreSQL service/network, and run `npm run db:migrate:pg` once as a controlled release step before routing traffic. Do not add production credentials to this repository.
+For Coolify, build from the repo `Dockerfile`, set runtime variables as Coolify secrets, and point `DATABASE_URL` at a dedicated `mkety_campaigns` database on the OCI PostgreSQL service. Do not point it at another MKETY application's database or reuse its schema. Run `npm run db:migrate:pg` once as a controlled release step before routing traffic. Do not add production credentials to this repository.
 
 For a future Workers/D1 deployment, copy `wrangler.jsonc.example` to `wrangler.jsonc`, create the D1 database and R2 bucket, then fill in the generated D1 database ID. The Workers target shares the Hono routes and accesses D1/R2 through native bindings.
 
