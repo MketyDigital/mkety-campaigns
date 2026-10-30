@@ -20,6 +20,7 @@ export type S3ObjectStoreConfig = {
   bucket: string;
   accessKeyId: string;
   secretAccessKey: string;
+  storageClass?: "STANDARD" | "STANDARD_IA";
 };
 
 export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
@@ -33,7 +34,13 @@ export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
   return {
     name: config.name,
     async put(key, body, contentType) {
-      await client.send(new PutObjectCommand({ Bucket: config.bucket, Key: key, Body: body, ContentType: contentType }));
+      await client.send(new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ...(config.storageClass ? { StorageClass: config.storageClass } : {}),
+      }));
     },
     async get(key) {
       const result = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
@@ -122,6 +129,7 @@ export function createOciArchiveStore(env: NodeJS.ProcessEnv): ObjectStore {
     bucket: OCI_OBJECT_STORAGE_BUCKET,
     accessKeyId: OCI_OBJECT_STORAGE_ACCESS_KEY_ID,
     secretAccessKey: OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    storageClass: "STANDARD_IA",
   });
 }
 
@@ -133,8 +141,9 @@ export function createAzureBackupStore(env: NodeJS.ProcessEnv): ObjectStore {
 }
 
 /**
- * Backup targets are optional. An absent credential group means that target is
- * disabled; a partially configured group is an error so operators notice typos.
+ * Backup targets are optional. OCI is opt-in even when its credentials exist;
+ * no OCI store is made available unless OCI_BACKUP_ENABLED is exactly "true".
+ * Once enabled, a partial credential group fails fast so operators notice typos.
  */
 export function createOptionalBackupStores(env: NodeJS.ProcessEnv): ObjectStore[] {
   const ociKeys = [
@@ -157,7 +166,9 @@ export function createOptionalBackupStores(env: NodeJS.ProcessEnv): ObjectStore[
   };
 
   const stores: ObjectStore[] = [];
-  if (validateGroup("OCI", ociKeys)) stores.push(createOciArchiveStore(env));
+  if (env.OCI_BACKUP_ENABLED === "true" && validateGroup("OCI", ociKeys)) {
+    stores.push(createOciArchiveStore(env));
+  }
   if (validateGroup("Azure", azureKeys)) stores.push(createAzureBackupStore(env));
   return stores;
 }
