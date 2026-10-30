@@ -1,7 +1,7 @@
 # Mkety Campaigns Platform Design
 
 Date: 2026-10-29
-Status: Proposed implementation design, based on the owner-approved standalone roadmap and phased MVP.
+Status: Approved implementation design, refined with the owner on 2026-10-30.
 
 ## Intent
 
