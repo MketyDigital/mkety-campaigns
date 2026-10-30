@@ -6,7 +6,7 @@ Status: FOUNDATION IN PROGRESS (no deployment or live sending). Owner: MKETY Ops
 - One TypeScript/Hono application with shared routes and separate Node and Cloudflare Workers entry points.
 - Coolify on the OCI VM is the first deployment target. It uses PostgreSQL through `DATABASE_URL`; this repo does not provision or change an existing database.
 - Optional Cloudflare Workers deployment uses D1 through a binding. D1 is not used by the Coolify deployment.
-- R2 is the primary object store. OCI Object Storage (Infrequent Access) and Azure Blob Storage are configured as secondary archive/backup targets. Normal request handling writes to R2 only; explicit background replication reports each target separately for safe retries.
+- R2 is the primary object store. Azure Blob is an optional backup target. OCI Object Storage is provisionable but stays feature-flagged off; its adapter uses object-level Infrequent Access only after explicit activation. Normal request handling writes to R2 only; explicit background replication reports each enabled target separately for safe retries.
 - Initial migrations define tenant seats, consent, contacts, suppression, campaigns, idempotent jobs, delivery attempts, archive manifests, and audit records.
 - Better Auth now provides invite-only email/password sign-in and TOTP/backup-code MFA. Tenant routes fail closed unless the session has MFA enabled, the session was created after MFA enrollment, and the user has one active seat on an approved tenant.
 - ACS Email and OCI Email Delivery HTTPS provider adapters accept a per-message sender, with mocked-request signing tests. The provider credentials are platform-level; each tenant's sender must come from that tenant's verified domain records. Domain onboarding and campaign send routes are not built yet; delivery queues, event reconciliation, and live provider checks remain outstanding.
@@ -26,7 +26,7 @@ For a future Workers/D1 deployment, copy `wrangler.jsonc.example` to `wrangler.j
 ### Storage rules
 - Use tenant-prefixed opaque object keys; never put email addresses or other customer identifiers in keys.
 - Keep R2 as the active source. Archive/backup copies go to OCI Infrequent Access and Azure Blob from an explicit background job; retries must be idempotent and recorded in `object_archive_manifest`.
-- OCI Object Storage buckets default to Standard or Archive, not Infrequent Access. Use a Standard bucket with an Object Lifecycle Management rule to transition the backup objects to Infrequent Access; choose the age based on retention and retrieval needs. Infrequent Access has a 31-day minimum retention and retrieval fees.
+- Keep the OCI bucket private and at its Standard default tier. OCI Infrequent Access is an object-level tier; when OCI backup is explicitly enabled, the adapter selects it for new backup objects. Keep each object for at least 31 days and account for retrieval fees. Do not configure lifecycle rules or write objects while OCI_BACKUP_ENABLED is false.
 - Do not delete the R2 primary copy until the archive and backup copies have been verified and retention policy allows deletion.
 - Keep imported contact data, consent evidence, and suppressions in the database; object storage is for staged uploads, exports, and approved campaign assets.
 
@@ -41,7 +41,7 @@ See [Storage credential setup](docs/storage-credentials.md) for the exact values
 ## Channels & delivery-provider configuration
 - Email: Azure Communication Services (ACS) Email and OCI Email Delivery HTTPS adapters are implemented behind a provider contract. The platform uses its own provider credentials to send for tenants after each tenant proves control of its sender domain and the provider authorizes it. A tenant's sender address is selected server-side from verified domain records, never accepted directly from request input. No campaign send route calls the adapters yet. OCI is not eligible for use until credentials, sender/domain checks, a sandbox test, operator enablement, and safety limits are in place.
 - Portal hostname: `campaign.mkety.com` is the app URL; it does not restrict the From address. `info@mkety.com` can be used after the root domain is verified and authenticated at the selected provider. Since MKETY Mail already uses the root domain, review its DNS first, preserve its MX records, and merge any provider authorization into existing SPF/DKIM/DMARC setup. A dedicated marketing subdomain offers better reputation isolation.
-- SMS: ACS SMS adapter implemented if subscription, sender type, phone-number procurement and destination-country approvals permit. SMS is *not* considered active merely because an ACS resource exists. Future SMS provider adapter remains available.
+- SMS: implement provider-neutral SMS support and select adapters by target-country cost, sender eligibility, and registration requirements. ACS SMS is not used in the initial provider lineup. SMS remains off until the provider, sender, consent, country checks, and spending limits are approved.
 - Provider routing controlled in admin UI with explicit enabled/disabled state, country capability, tenant/domain eligibility, throughput limit, budget guardrails, circuit breaker and emergency stop. Never silently retry an uncertain delivery through a second provider: use idempotency, reconciliation and explicit operator review.
 - Inbound emails and mailboxes are **out of scope**: existing MKETY Mail continues untouched.
 - ACS retirement planning: feature/provider-independent data schema and adapters; export or move to OCI Email Delivery by admin decision before ACS Email retirement. Confirm vendor onboarding/deadlines with Microsoft.
@@ -59,14 +59,14 @@ See [Storage credential setup](docs/storage-credentials.md) for the exact values
 ## Target architecture
 Standalone UI + authenticated API + isolated database + durable job queue + worker + events processor.
 Modules: tenants, single business access seat, contacts, consent, domains, templates, campaigns, delivery_attempts, provider_profiles, suppression, events, quotas/billing, audit.
-Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. OCI adapter disabled until admin enables; ACS Email/SMS separate channel capabilities. State machine must be idempotent and replay-safe.
+Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. OCI Email is disabled until Ops enables it; SMS uses provider-neutral adapters and does not assume ACS. State machine must be idempotent and replay-safe.
 
 ## Phases / acceptance gates
 0. Verify Azure sponsorship, ACS resource linkage, email domain support, SMS country/number eligibility, provider quotas, subscription limitations, and independent hosting plan. No customer uploads.
 1. Complete standalone foundation, CI/test environment, authentication/MFA, tenant-bound authorization, and no integrations to existing MKETY production. The app shell, migrations, invite-only auth, TOTP gate, and provider interfaces are in place; database-level RLS, full admin onboarding, and customer-data endpoints are not.
 2. Wire ACS Email and OCI Email Delivery adapters into a durable queue, then test delivery, idempotency and event mapping in sandbox. OCI remains disabled until explicit operator enablement.
 3. Build domain onboarding, consent-aware CSV imports, suppression, templates, campaigns, operator review, scheduling, quotas and audit logs.
-4. Build conditional ACS SMS sender onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates.
+4. Build provider-neutral SMS onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates. ACS SMS is not part of the initial provider lineup.
 5. Closed pilot: MKETY test domain, permission-based contacts, small batches; production smoke tests and rollback.
 6. Invite a few enterprises, monitor quotas/costs/deliverability, do recovery test, establish ACS offboarding and OCI enablement procedure.
 
@@ -74,4 +74,4 @@ Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveD
 No mailbox hosting or reply inbox, no general CRM, no team/employee invitation tree, no changes to MKETY Mail, no automated marketing to imported lists without evidence of permission.
 
 ## Operational notes
-Existing Azure resources reported by owner: separate Email Communication Services and Communication Services resources, provisioning not inspected by this repo. Existing OCI Email Delivery requires separate sender-domain authorization. No credentials should ever enter GitHub. Document exact DNS entries only after resources and verified domain selection. 
+Existing Azure resources reported by owner: Email Communication Services and Communication Services resources. OCI Email Delivery requires sender-domain authorization. Never commit credentials or expose them in logs. The approved encrypted GitHub repository secrets may transport credentials to Coolify runtime variables through the deployment workflow. Portal-managed Azure email-domain creation requires a separate Entra identity with a custom role scoped to the Email Service and Communication Service resources. Document DNS entries only after Azure creates the domain. 
