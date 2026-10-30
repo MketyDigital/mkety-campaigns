@@ -43,6 +43,7 @@ test("OCI backup becomes available only after explicit enablement and full confi
     OCI_OBJECT_STORAGE_BUCKET: "mkety-central-backups",
   });
   assert.deepEqual(stores.map((store) => store.name), ["oci-infrequent-access"]);
+  return assert.rejects(stores[0].delete("backup/key"), /deletion is disabled/);
 });
 
 test("replication reports each backup result independently", async () => {
