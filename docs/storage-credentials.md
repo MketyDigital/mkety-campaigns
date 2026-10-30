@@ -1,6 +1,6 @@
 # Optional backup storage credentials
 
-OCI and Azure credentials are not required to run the app. Add them as Coolify environment secrets only when you are ready to enable each backup target. Never commit these values or paste the secret values into chat.
+OCI and Azure credentials are not required to run the app. Azure backup becomes an available backup target when its full credential group is configured. OCI backup stays off unless OCI_BACKUP_ENABLED=true and OCI_BACKUP_RETENTION_DAYS is at least 31. Never commit these values or paste the secret values into chat.
 
 ## Azure Blob Storage
 
@@ -41,7 +41,7 @@ To find or create the values:
 4. Select the OCI region where the bucket lives and copy the region identifier shown in the Console.
 5. Open **Object Storage & Archive Storage → Buckets** and create/select the backup bucket. Copy its exact bucket name.
 6. Build the endpoint from the namespace and region using the format above, then add all five values to Coolify secrets.
-7. Keep the bucket's default tier as **Standard** and configure an Object Lifecycle Management rule for its backup objects to move them to **Infrequent Access** after the chosen age. Do not choose Archive for this workflow.
+7. Keep the bucket's default tier as **Standard**. The app selects **Infrequent Access** per new object only after the OCI feature flag is deliberately enabled. Keep retention at 31 days or more; the application blocks early deletion of OCI backup objects. Do not choose Archive for this workflow.
 
 OCI's S3 compatibility documentation gives the endpoint pattern and Customer Secret Key requirements [here](https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/s3compatibleapi.htm). Its tier documentation explains that Infrequent Access is assigned per object and has a 31-day minimum retention period plus retrieval fees [here](https://docs.oracle.com/iaas/Content/Object/Concepts/understandingstoragetiers.htm).
 
@@ -52,6 +52,8 @@ Add the exact names below as secrets/environment variables on the MKETY Campaign
 ```text
 AZURE_STORAGE_CONNECTION_STRING
 AZURE_STORAGE_CONTAINER
+OCI_BACKUP_ENABLED
+OCI_BACKUP_RETENTION_DAYS
 OCI_OBJECT_STORAGE_ENDPOINT
 OCI_OBJECT_STORAGE_REGION
 OCI_OBJECT_STORAGE_ACCESS_KEY_ID
