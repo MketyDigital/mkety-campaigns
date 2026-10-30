@@ -9,8 +9,8 @@ Status: PLAN ONLY (no deployed application). Owner: MKETY Ops. Date: 2026-10-15.
 - No live sending or customer-data migration until explicit signoff and successful compliance/domain/sender checks.
 
 ## Channels & delivery-provider configuration
-- Email: Azure Communication Services (ACS) Email adapter supported and initial candidate; OCI Email Delivery adapter implemented **from day one** and disabled by default. Admin must enter credentials, validate sender/domain, test, and explicitly enable OCI at the platform or tenant level.
-- SMS: ACS SMS adapter implemented if subscription, sender type, phone-number procurement and destination-country approvals permit. SMS is *not* considered active merely because an ACS resource exists. Future SMS provider adapter remains available.
+- Email: Azure Communication Services (ACS) Email is the initial adapter; OCI Email Delivery is implemented as an optional adapter and disabled by default. Mkety centrally manages provider credentials. Tenants authorize their domains and senders in the portal, then complete verification and test steps before sending.
+- SMS: use a provider-neutral SMS adapter and select providers by destination-country pricing, sender availability, registration, and approval. ACS SMS is not part of the initial lineup. SMS remains disabled until a provider, eligible sender, country rules, and consent are approved.
 - Provider routing controlled in admin UI with explicit enabled/disabled state, country capability, tenant/domain eligibility, throughput limit, budget guardrails, circuit breaker and emergency stop. Never silently retry an uncertain delivery through a second provider: use idempotency, reconciliation and explicit operator review.
 - Inbound emails and mailboxes are **out of scope**: existing MKETY Mail continues untouched.
 - ACS retirement planning: feature/provider-independent data schema and adapters; export or move to OCI Email Delivery by admin decision before ACS Email retirement. Confirm vendor onboarding/deadlines with Microsoft.
@@ -28,14 +28,14 @@ Status: PLAN ONLY (no deployed application). Owner: MKETY Ops. Date: 2026-10-15.
 ## Architecture
 Standalone UI + authenticated API + isolated database + durable job queue + worker + events processor.
 Modules: tenants, single business access seat, contacts, consent, domains, templates, campaigns, delivery_attempts, provider_profiles, suppression, events, quotas/billing, audit.
-Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. OCI adapter disabled until admin enables; ACS Email/SMS separate channel capabilities. State machine must be idempotent and replay-safe.
+Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. OCI Email adapter disabled until Ops enables; SMS adapters are provider-independent and must not assume ACS. State machine must be idempotent and replay-safe.
 
 ## Phases / acceptance gates
 0. Verify Azure sponsorship, ACS resource linkage, email domain support, SMS country/number eligibility, provider quotas, subscription limitations, and independent hosting plan. No customer uploads.
 1. Initialize standalone codebase/CI with test environment, database migrations, MFA, tenant-bound RLS/authorization and no integrations to existing MKETY production.
 2. Build ACS Email and OCI Email Delivery adapters (OCI disabled), test delivery, idempotency and event mapping in sandbox.
 3. Build domain onboarding, consent-aware CSV imports, suppression, templates, campaigns, operator review, scheduling, quotas and audit logs.
-4. Build conditional ACS SMS sender onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates.
+4. Build provider-neutral SMS onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates; do not use ACS SMS initially.
 5. Closed pilot: MKETY test domain, permission-based contacts, small batches; production smoke tests and rollback.
 6. Invite a few enterprises, monitor quotas/costs/deliverability, do recovery test, establish ACS offboarding and OCI enablement procedure.
 
@@ -43,4 +43,4 @@ Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveD
 No mailbox hosting or reply inbox, no general CRM, no team/employee invitation tree, no changes to MKETY Mail, no automated marketing to imported lists without evidence of permission.
 
 ## Operational notes
-Existing Azure resources reported by owner: separate Email Communication Services and Communication Services resources, provisioning not inspected by this repo. Existing OCI Email Delivery requires separate sender-domain authorization. No credentials should ever enter GitHub. Document exact DNS entries only after resources and verified domain selection. 
+Existing Azure resources reported by owner: Email Communication Services and Communication Services resources. Existing OCI Email Delivery requires sender-domain authorization. Never commit credentials or print them in CI logs. The approved encrypted GitHub repository secrets may transport credentials to Coolify runtime environment variables through the deployment workflow. Azure portal-managed domain creation requires a separate resource-scoped Azure Resource Manager identity. Document DNS records only after a provider creates the domain. 
