@@ -7,11 +7,34 @@ test("backup targets stay disabled when their credentials are absent", () => {
   assert.deepEqual(createOptionalBackupStores({}), []);
 });
 
-test("partial optional backup configuration fails visibly", () => {
+test("OCI backup stays off when credentials exist but the feature flag is absent", () => {
+  const stores = createOptionalBackupStores({
+    OCI_OBJECT_STORAGE_ENDPOINT: "https://namespace.compat.objectstorage.eu-frankfurt-1.oci.customer-oci.com",
+    OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1",
+    OCI_OBJECT_STORAGE_ACCESS_KEY_ID: "access",
+    OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: "secret",
+    OCI_OBJECT_STORAGE_BUCKET: "mkety-central-backups",
+  });
+  assert.deepEqual(stores, []);
+});
+
+test("OCI backup rejects partial settings only after explicit enablement", () => {
   assert.throws(
-    () => createOptionalBackupStores({ OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1" }),
+    () => createOptionalBackupStores({ OCI_BACKUP_ENABLED: "true", OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1" }),
     /OCI backup storage is partially configured/,
   );
+});
+
+test("OCI backup becomes available only after explicit enablement and full configuration", () => {
+  const stores = createOptionalBackupStores({
+    OCI_BACKUP_ENABLED: "true",
+    OCI_OBJECT_STORAGE_ENDPOINT: "https://namespace.compat.objectstorage.eu-frankfurt-1.oci.customer-oci.com",
+    OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1",
+    OCI_OBJECT_STORAGE_ACCESS_KEY_ID: "access",
+    OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: "secret",
+    OCI_OBJECT_STORAGE_BUCKET: "mkety-central-backups",
+  });
+  assert.deepEqual(stores.map((store) => store.name), ["oci-infrequent-access"]);
 });
 
 test("replication reports each backup result independently", async () => {
