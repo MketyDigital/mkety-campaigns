@@ -21,6 +21,7 @@ export type S3ObjectStoreConfig = {
   accessKeyId: string;
   secretAccessKey: string;
   storageClass?: "STANDARD" | "STANDARD_IA";
+  deleteDisabled?: boolean;
 };
 
 export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
@@ -48,6 +49,9 @@ export function createS3ObjectStore(config: S3ObjectStoreConfig): ObjectStore {
       return { body: await result.Body.transformToByteArray(), contentType: result.ContentType };
     },
     async delete(key) {
+      if (config.deleteDisabled) {
+        throw new Error(`${config.name}: deletion is disabled to protect backup retention`);
+      }
       await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
     },
   };
@@ -130,6 +134,7 @@ export function createOciArchiveStore(env: NodeJS.ProcessEnv): ObjectStore {
     accessKeyId: OCI_OBJECT_STORAGE_ACCESS_KEY_ID,
     secretAccessKey: OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY,
     storageClass: "STANDARD_IA",
+    deleteDisabled: true,
   });
 }
 
@@ -166,8 +171,12 @@ export function createOptionalBackupStores(env: NodeJS.ProcessEnv): ObjectStore[
   };
 
   const stores: ObjectStore[] = [];
-  if (env.OCI_BACKUP_ENABLED === "true" && validateGroup("OCI", ociKeys)) {
-    stores.push(createOciArchiveStore(env));
+  if (env.OCI_BACKUP_ENABLED === "true") {
+    const retentionDays = Number(env.OCI_BACKUP_RETENTION_DAYS);
+    if (!Number.isInteger(retentionDays) || retentionDays < 31) {
+      throw new Error("OCI_BACKUP_RETENTION_DAYS must be at least 31 for Infrequent Access");
+    }
+    if (validateGroup("OCI", ociKeys)) stores.push(createOciArchiveStore(env));
   }
   if (validateGroup("Azure", azureKeys)) stores.push(createAzureBackupStore(env));
   return stores;
