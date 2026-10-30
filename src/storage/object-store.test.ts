@@ -20,7 +20,7 @@ test("OCI backup stays off when credentials exist but the feature flag is absent
 
 test("OCI backup rejects partial settings only after explicit enablement", () => {
   assert.throws(
-    () => createOptionalBackupStores({ OCI_BACKUP_ENABLED: "true", OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1" }),
+    () => createOptionalBackupStores({ OCI_BACKUP_ENABLED: "true", OCI_BACKUP_RETENTION_DAYS: "31", OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1" }),
     /OCI backup storage is partially configured/,
   );
 });
