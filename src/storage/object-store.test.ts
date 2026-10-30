@@ -25,9 +25,17 @@ test("OCI backup rejects partial settings only after explicit enablement", () =>
   );
 });
 
+test("OCI backup cannot be enabled without at least 31 days retention", () => {
+  assert.throws(
+    () => createOptionalBackupStores({ OCI_BACKUP_ENABLED: "true" }),
+    /OCI_BACKUP_RETENTION_DAYS must be at least 31/,
+  );
+});
+
 test("OCI backup becomes available only after explicit enablement and full configuration", () => {
   const stores = createOptionalBackupStores({
     OCI_BACKUP_ENABLED: "true",
+    OCI_BACKUP_RETENTION_DAYS: "31",
     OCI_OBJECT_STORAGE_ENDPOINT: "https://namespace.compat.objectstorage.eu-frankfurt-1.oci.customer-oci.com",
     OCI_OBJECT_STORAGE_REGION: "eu-frankfurt-1",
     OCI_OBJECT_STORAGE_ACCESS_KEY_ID: "access",
