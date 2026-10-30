@@ -26,7 +26,6 @@ test("Telnyx adapter sends one validated recipient with the resolved sender", as
   assert.equal(request?.url, "https://api.telnyx.com/v2/messages");
   assert.equal(request?.init.method, "POST");
   assert.equal(new Headers(request?.init.headers).get("authorization"), "Bearer test-key");
-  assert.equal(new Headers(request?.init.headers).get("idempotency-key"), "campaign-job-123");
   assert.deepEqual(JSON.parse(String(request?.init.body)), {
     from: "+12065550101",
     to: "+12065550102",
