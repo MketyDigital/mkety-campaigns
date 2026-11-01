@@ -62,6 +62,11 @@ test("domain workspace renders a straightforward onboarding screen", async () =>
   assert.match(html, /\/api\/tenant\/domains/);
 });
 
+test("home page links to sender-domain setup", async () => {
+  const response = await createApp().request("/");
+  assert.match(await response.text(), /href="\/app\/domains"/);
+});
+
 test("auth endpoints fail closed when auth secrets are not configured", async () => {
   const response = await createApp().request("/api/auth/sign-in/email", { method: "POST" });
   assert.equal(response.status, 503);

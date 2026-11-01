@@ -60,6 +60,7 @@ export function createApp(
       .card { background: white; border: 1px solid #e4eaf2; border-radius: 14px; padding: 20px; box-shadow: 0 5px 18px #163d6a08; }
       .card h2 { margin: 0 0 8px; font-size: 15px; }
       .card p { margin: 0; color: #6a7b91; font-size: 13px; line-height: 1.55; }
+      .card a { display: inline-block; margin-top: 12px; color: #006fff; font-size: 13px; font-weight: 700; text-decoration: none; }
       .status { display: inline-flex; align-items: center; gap: 7px; color: #277650; font-size: 12px; font-weight: 700; }
       .dot { width: 7px; height: 7px; background: #32a46b; border-radius: 50%; }
       footer { margin-top: 32px; color: #8795a8; font-size: 12px; }
@@ -73,6 +74,7 @@ export function createApp(
       <p class="intro">A focused workspace for consent-aware email and SMS campaigns, with isolated tenant data and controlled delivery.</p>
       <div class="grid">
         <section class="card"><h2>Campaigns</h2><p>Drafts, approvals, schedules, and delivery controls are being built.</p></section>
+        <section class="card"><h2>Sender domains</h2><p>Add your domain and publish the provider DNS records before enabling email delivery.</p><a href="/app/domains">Set up a sender domain →</a></section>
         <section class="card"><h2>Storage</h2><p>R2 is the primary object store. OCI archive and Azure backup are independent targets.</p></section>
         <section class="card"><h2>Delivery safety</h2><p>Sending stays disabled until provider, domain, and compliance checks are approved.</p></section>
       </div>
