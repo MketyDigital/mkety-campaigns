@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/node.js",
     "admin:bootstrap": "node --env-file-if-exists=.env scripts/bootstrap-ops.mjs",
-    "test": "node --import tsx --test src/app.test.ts src/auth.test.ts src/storage/object-store.test.ts src/email/providers.test.ts src/sms/providers.test.ts",
+    "test": "node --import tsx --test src/app.test.ts src/auth.test.ts src/storage/object-store.test.ts src/email/providers.test.ts src/sms/providers.test.ts src/domains/azure-arm.test.ts src/domains/service.test.ts src/domains/runtime.test.ts src/worker.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:migrate:pg": "node --env-file-if-exists=.env scripts/migrate-postgres.mjs",
     "db:check-auth": "node --env-file-if-exists=.env scripts/check-auth-schema.mjs"
