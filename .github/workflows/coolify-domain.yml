@@ -32,6 +32,11 @@ jobs:
           : "${COOLIFY_API_TOKEN:?Set OCI_COOLIFY_TOKEN or COOLIFY_TOKEN in repository secrets}"
           case "$COOLIFY_URL" in
             https://*) ;;
+            http://*) echo "COOLIFY_URL must use HTTPS; refusing to send the API token over HTTP." >&2; exit 1 ;;
+            *) COOLIFY_URL="https://${COOLIFY_URL#//}" ;;
+          esac
+          case "$COOLIFY_URL" in
+            https://?*) ;;
             *) echo "COOLIFY_URL must use HTTPS." >&2; exit 1 ;;
           esac
 
