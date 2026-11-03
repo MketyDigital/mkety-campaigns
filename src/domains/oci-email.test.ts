@@ -11,6 +11,7 @@ test("OCI email domain adapter creates a domain and DKIM key, exposes DNS instru
   const calls: Request[] = [];
   let domainCreated = false;
   let dkimCreated = false;
+  let senderCreated = false;
   const provider = createOciEmailDomains({
     region: "eu-frankfurt-1", tenancyOcid: "tenancy", userOcid: "user", fingerprint: "01:02", privateKey: pem,
     compartmentOcid: "compartment",
@@ -27,7 +28,11 @@ test("OCI email domain adapter creates a domain and DKIM key, exposes DNS instru
       }
       if (url.pathname.endsWith("/emailDomains")) return new Response(JSON.stringify({ items: domainCreated ? [{ id: "domain-1", name: "mail.example.com", lifecycleState: "ACTIVE", activeDkimId: dkimCreated ? "dkim-1" : null, isSpf: true }] : [] }));
       if (url.pathname.endsWith("/dkims")) return new Response(JSON.stringify({ items: dkimCreated ? [{ id: "dkim-1", lifecycleState: "ACTIVE", dnsSubdomainName: "selector._domainkey.mail.example.com", cnameRecordValue: "selector.dkim.oci.example" }] : [] }));
-      if (url.pathname.endsWith("/senders")) return new Response(JSON.stringify({ sender: { id: "sender-1" } }), { status: 201 });
+      if (url.pathname.endsWith("/senders") && request.method === "POST") {
+        senderCreated = true;
+        return new Response(JSON.stringify({ sender: { id: "sender-1", emailAddress: "info@mail.example.com" } }), { status: 201 });
+      }
+      if (url.pathname.endsWith("/senders")) return new Response(JSON.stringify({ items: senderCreated ? [{ id: "sender-1", emailAddress: "info@mail.example.com" }] : [] }));
       return new Response("unexpected OCI request", { status: 404 });
     },
   });
@@ -41,8 +46,11 @@ test("OCI email domain adapter creates a domain and DKIM key, exposes DNS instru
   assert.equal(domain.verificationStates.DKIM?.status, "Verified");
 
   const sender = await provider.createSenderUsername("mail.example.com", "info", "Example Updates");
+  const retriedSender = await provider.createSenderUsername("mail.example.com", "info", "Example Updates");
   assert.equal(sender.provisioningState, "Succeeded");
   assert.equal(sender.id, "sender-1");
+  assert.equal(retriedSender.id, "sender-1");
+  assert.equal(calls.filter((request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/senders")).length, 1);
   assert.ok(calls.every((request) => request.headers.get("authorization")?.startsWith('Signature version="1"')));
   const senderRequest = calls.find((request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/senders"));
   assert.deepEqual(await senderRequest?.json(), { compartmentId: "compartment", emailAddress: "info@mail.example.com" });

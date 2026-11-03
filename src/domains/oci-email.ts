@@ -99,6 +99,15 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
     };
   }
 
+  async function findSender(domainName: string, username: string): Promise<AzureSenderUsernameState | undefined> {
+    const emailAddress = `${username}@${normalizeDomain(domainName)}`;
+    const query = new URLSearchParams({ compartmentId: compartment, emailAddress, limit: "100" });
+    const response = await request("GET", `/${API_VERSION}/senders?${query}`);
+    const sender = arrayField(response, "items").find((item) => stringField(item, "emailAddress")?.toLowerCase() === emailAddress.toLowerCase());
+    if (!sender) return undefined;
+    return { id: stringField(sender, "id") ?? emailAddress, username, displayName: username, provisioningState: "Succeeded" };
+  }
+
   return {
     async createDomain(domainName) {
       const normalized = normalizeDomain(domainName);
@@ -120,17 +129,16 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
       const state = await getDomainState(domainName);
       if (!state.linked) throw new Error("OCI domain SPF and DKIM must be verified before creating an approved sender");
       const emailAddress = `${username}@${normalizeDomain(domainName)}`;
+      const existing = await findSender(domainName, username);
+      if (existing) return { ...existing, displayName };
       const response = await request("POST", `/${API_VERSION}/senders`, { compartmentId: compartment, emailAddress });
       const sender = objectField(response, "sender") ?? response;
       return { id: stringField(sender, "id") ?? emailAddress, username, displayName, provisioningState: "Succeeded" };
     },
     async getSenderUsername(domainName, username): Promise<AzureSenderUsernameState> {
-      const emailAddress = `${username}@${normalizeDomain(domainName)}`;
-      const query = new URLSearchParams({ compartmentId: compartment, emailAddress, limit: "100" });
-      const response = await request("GET", `/${API_VERSION}/senders?${query}`);
-      const sender = arrayField(response, "items").find((item) => stringField(item, "emailAddress")?.toLowerCase() === emailAddress.toLowerCase());
+      const sender = await findSender(domainName, username);
       if (!sender) throw new Error("OCI approved sender was not found");
-      return { id: stringField(sender, "id") ?? emailAddress, username, displayName: username, provisioningState: "Succeeded" };
+      return sender;
     },
   };
 }
