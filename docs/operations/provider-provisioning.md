@@ -55,10 +55,22 @@ First verify the exact provider operations are available:
 ```bash
 az account set --subscription "693b87c2-606b-4cd5-8ebb-3b8f36a1a9ad"
 az provider operation list --namespace Microsoft.Communication \
-  --query "[].name" -o tsv | grep -iE 'EmailServices/domains/(read|write)|CommunicationServices/(read|write)'
+  --query "[].name" -o tsv | grep -iE 'EmailServices/domains/(read|write)|EmailServices/domains/senderUsernames/(read|write)|CommunicationServices/(read|write)'
 ```
 
-Expect the four operations for domain read/write and Communication Service read/write. If any are missing, stop and share only the operation names; don't broaden the role to Contributor.
+Expect six operations: email-domain read/write, sender-username read/write, and Communication Service read/write. If any are missing, stop and share only the operation names; don't broaden the role to Contributor.
+
+If the domain-management identity and role were already created with the earlier four-operation role, add the two sender-username permissions before using **Sender addresses**. This updates the existing custom role and preserves its current assignment scopes:
+
+```bash
+ROLE_NAME="Mkety Campaigns Domain Provisioner"
+ROLE_FILE="$HOME/mkety-campaign-domain-role-update.json"
+az role definition list --name "$ROLE_NAME" --query '[0]' -o json \
+  | jq '.Actions += ["Microsoft.Communication/EmailServices/domains/senderUsernames/read", "Microsoft.Communication/EmailServices/domains/senderUsernames/write"] | .Actions |= unique' \
+  > "$ROLE_FILE"
+az role definition update --role-definition "$ROLE_FILE" --only-show-errors
+rm -f "$ROLE_FILE"
+```
 
 Then create the app, role, assignments, and a short-lived client secret:
 
@@ -97,6 +109,8 @@ cat > "$ROLE_FILE" <<EOF
   "Actions": [
     "Microsoft.Communication/EmailServices/domains/read",
     "Microsoft.Communication/EmailServices/domains/write",
+    "Microsoft.Communication/EmailServices/domains/senderUsernames/read",
+    "Microsoft.Communication/EmailServices/domains/senderUsernames/write",
     "Microsoft.Communication/CommunicationServices/read",
     "Microsoft.Communication/CommunicationServices/write"
   ],
@@ -107,7 +121,11 @@ cat > "$ROLE_FILE" <<EOF
 }
 EOF
 
-az role definition create --role-definition "$ROLE_FILE" --only-show-errors >/dev/null
+if az role definition list --name "$ROLE_NAME" --query '[0].id' -o tsv | grep -q .; then
+  az role definition update --role-definition "$ROLE_FILE" --only-show-errors >/dev/null
+else
+  az role definition create --role-definition "$ROLE_FILE" --only-show-errors >/dev/null
+fi
 az role assignment create --assignee-object-id "$SP_OBJECT_ID" \
   --assignee-principal-type ServicePrincipal --role "$ROLE_NAME" \
   --scope "$EMAIL_SERVICE_ID" --only-show-errors >/dev/null

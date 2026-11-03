@@ -14,6 +14,7 @@ const message: CampaignEmail = {
   subject: "A test",
   text: "Plain text",
   html: "<p>Plain text</p>",
+  headers: { "List-Unsubscribe": "<https://campaign.mkety.com/unsubscribe?token=opaque>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
 };
 
 test("ACS provider sends a signed request and returns the accepted operation", async () => {
@@ -40,6 +41,7 @@ test("ACS provider sends a signed request and returns the accepted operation", a
     senderAddress: "hello@tenant.example",
     recipients: { to: [{ address: "person@example.net" }] },
     content: { subject: "A test", plainText: "Plain text", html: "<p>Plain text</p>" },
+    headers: { "List-Unsubscribe": "<https://campaign.mkety.com/unsubscribe?token=opaque>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" },
     userEngagementTrackingDisabled: true,
   });
   const date = captured.headers.get("x-ms-date") ?? "";

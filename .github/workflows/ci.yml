@@ -37,6 +37,5 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run db:migrate:pg
-      - run: npm run db:migrate:pg
       - run: npm run db:check-auth
       - run: npm test

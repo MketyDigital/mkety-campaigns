@@ -7,6 +7,7 @@ export type CampaignEmail = {
   subject: string;
   text?: string;
   html?: string;
+  headers?: Record<string, string>;
 };
 
 export type EmailSendResult = {
@@ -43,6 +44,7 @@ export function createAcsEmailProvider(config: {
           ...(message.text ? { plainText: message.text } : {}),
           ...(message.html ? { html: message.html } : {}),
         },
+        ...(message.headers ? { headers: message.headers } : {}),
         userEngagementTrackingDisabled: true,
       });
       const date = new Date().toUTCString();

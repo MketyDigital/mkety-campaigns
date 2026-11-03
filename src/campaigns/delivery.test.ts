@@ -1,0 +1,62 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createEmailCampaignWorker, type CampaignDeliveryJob, type CampaignDeliveryRepository } from "./delivery.js";
+import type { EmailProvider } from "../email/providers.js";
+
+const job: CampaignDeliveryJob = {
+  id: "job-1", tenantId: "tenant-1", campaignId: "campaign-1", contactId: "contact-1",
+  idempotencyKey: "campaign-1:contact-1", from: "info@mail.example.com", to: "person@example.com",
+  subject: "Hello", bodyText: "Thanks for subscribing.", unsubscribeUrl: `https://campaign.mkety.com/unsubscribe?token=${"a".repeat(43)}`,
+};
+
+test("campaign worker does nothing while the send gate is off", async () => {
+  let claimed = false;
+  const repository = fakeRepository({ async claimNext() { claimed = true; return job; } });
+  const worker = createEmailCampaignWorker(repository, fakeProvider(), false);
+  assert.equal(await worker.processOne(), false);
+  assert.equal(claimed, false);
+});
+
+test("campaign worker sends a claimed job with stable idempotency and records acceptance", async () => {
+  let sent: unknown;
+  const repository = fakeRepository();
+  const provider = fakeProvider({ async send(message) { sent = message; return { provider: "acs-email", providerMessageId: "provider-1", acceptedAt: "2026-11-03T12:00:00.000Z" }; } });
+  const result = await createEmailCampaignWorker(repository, provider, true).processOne();
+  assert.equal(result, true);
+  assert.equal((sent as { idempotencyKey: string }).idempotencyKey, job.idempotencyKey);
+  assert.equal((sent as { from: string }).from, job.from);
+  assert.deepEqual((sent as { to: string[] }).to, [job.to]);
+  assert.deepEqual((sent as { headers?: Record<string, string> }).headers, {
+    "List-Unsubscribe": `<https://campaign.mkety.com/unsubscribe?token=${"a".repeat(43)}>`,
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+  });
+  assert.equal(repository.accepted[0]?.providerMessageId, "provider-1");
+});
+
+test("campaign worker marks provider errors uncertain and never retries automatically", async () => {
+  const repository = fakeRepository();
+  let attempts = 0;
+  const provider = fakeProvider({ async send() { attempts++; throw new Error("connection reset"); } });
+  const worker = createEmailCampaignWorker(repository, provider, true);
+  assert.equal(await worker.processOne(), true);
+  assert.equal(await worker.processOne(), false);
+  assert.equal(attempts, 1);
+  assert.equal(repository.uncertain[0]?.id, job.id);
+});
+
+function fakeProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
+  return { name: "acs-email", async send() { return { provider: "acs-email", acceptedAt: "2026-11-03T12:00:00.000Z" }; }, ...overrides };
+}
+
+function fakeRepository(overrides: Partial<CampaignDeliveryRepository> = {}) {
+  const accepted: Array<{ id: string; providerMessageId?: string }> = [];
+  const uncertain: Array<{ id: string; error: string }> = [];
+  let claimed = false;
+  const repository: CampaignDeliveryRepository = {
+    async claimNext() { if (claimed) return null; claimed = true; return job; },
+    async markAccepted(id, result) { accepted.push({ id, providerMessageId: result.providerMessageId }); },
+    async markUncertain(id, error) { uncertain.push({ id, error }); },
+    ...overrides,
+  };
+  return Object.assign(repository, { accepted, uncertain });
+}

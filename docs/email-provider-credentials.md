@@ -4,7 +4,7 @@ Provider adapters use fetch-compatible HTTP APIs so the same provider contract c
 
 These are platform-level provider credentials. Tenants do not receive or enter MKETY's ACS connection string or OCI API signing key. Each tenant's verified domain and allowed From addresses belong in tenant-scoped application records. The server must resolve a message's From address from those verified records; it must never trust a From address supplied directly by a browser or API caller. The adapters accept the already-resolved From address on each message so they can serve multiple tenants through a shared provider account.
 
-For the deployed app, add these names to the MKETY Campaigns service in Coolify. If a future trusted GitHub Actions workflow needs to run an explicit integration check, use protected GitHub Environment secrets rather than exposing production credentials to every repository workflow. Keep live sending disabled until domain, sender, consent, and safety checks are signed off.
+For the deployed app, add these names to the MKETY Campaigns service in Coolify. If a future trusted GitHub Actions workflow needs to run an explicit integration check, use protected GitHub Environment secrets rather than exposing production credentials to every repository workflow. Campaign delivery is off by default. `EMAIL_CAMPAIGN_SEND_ENABLED=true` enables both the Ops queue action and the Node worker; use it only in a controlled test deployment after domain, sender, consent, and safety checks. `EMAIL_CAMPAIGN_MAX_RECIPIENTS` defaults to 100 and may be set to 1 for the first send. The separate `EMAIL_TEST_SEND_ENABLED` switch permits one fixed test message to the signed-in account email.
 
 ## Azure Communication Services Email
 
@@ -71,3 +71,21 @@ OCI_EMAIL_COMPARTMENT_OCID
 Sender addresses are selected per tenant from its verified domain configuration; they are not fixed deployment environment variables.
 
 The existing backup variables `AZURE_STORAGE_CONNECTION_STRING` and `OCI_OBJECT_STORAGE_*` are separate credentials for Azure Blob and OCI Object Storage. They are not interchangeable with these email provider credentials.
+
+## One controlled test message
+
+1. In Coolify, set `EMAIL_PROVIDER=acs-email`, add `ACS_EMAIL_CONNECTION_STRING`, and set `EMAIL_TEST_SEND_ENABLED=true` for the test environment only.
+2. Apply the current PostgreSQL migrations and deploy the app.
+3. Sign in as a tenant owner with MFA, add a customer-managed email domain in **Sender domains**, publish the DNS records shown by Azure, refresh verification, and link the domain.
+4. Open **Sender addresses**, create a username such as `info`, and refresh its status until it reads `ready`.
+5. Select **Send test email to your signed-in account**. The app sends a fixed message from that sender to the account email already on the session. It ignores any caller-supplied recipient or From address.
+6. Check the inbox and ACS Email status. An HTTP success means ACS accepted the message; it does not guarantee mailbox delivery.
+7. Set `EMAIL_TEST_SEND_ENABLED=false` after the check. This test path never enqueues campaigns.
+
+The test action is unavailable while the sender is pending, the provider is unconfigured, or the runtime flag is false. SMS and OCI Object Storage backup remain disabled independently.
+
+## One-recipient campaign check
+
+After the sender test succeeds, create a contact for a mailbox you control and record its real, channel-specific consent evidence. Create an email draft, submit it for review, and approve it as an MFA-enabled Ops user. Set `EMAIL_CAMPAIGN_MAX_RECIPIENTS=1` and `EMAIL_CAMPAIGN_SEND_ENABLED=true` in the isolated test deployment, redeploy, then use the separate **Queue campaign delivery** action in Ops. The queue only includes contacts with current granted consent and no suppression. Check the inbox and provider status; turn the gate back off immediately after the test. A provider acceptance response means queued by ACS, not guaranteed inbox delivery.
+
+The current portal campaign queue sends through ACS Email. OCI Email Delivery has an HTTP signing adapter, but the customer-domain verification and approved-sender setup is not yet connected to portal campaign routing.
