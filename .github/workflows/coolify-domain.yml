@@ -1,0 +1,101 @@
+name: Configure Campaigns Coolify domain
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/coolify-domain.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mkety-campaigns-coolify-domain
+  cancel-in-progress: false
+
+jobs:
+  configure-domain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
+      COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      APP_REPOSITORY: MketyDigital/mkety-campaigns
+      APP_BRANCH: main
+      CAMPAIGNS_DOMAIN: https://campaign.mkety.com
+    steps:
+      - name: Configure app domain and redeploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${COOLIFY_API_TOKEN:?Set OCI_COOLIFY_TOKEN or COOLIFY_TOKEN in repository secrets}"
+          case "$COOLIFY_URL" in
+            https://*) ;;
+            *) echo "COOLIFY_URL must use HTTPS." >&2; exit 1 ;;
+          esac
+
+          api="${COOLIFY_URL%/}/api/v1"
+          headers=(--header "Authorization: Bearer $COOLIFY_API_TOKEN" --header "Accept: application/json")
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/applications" > "$RUNNER_TEMP/coolify-apps.json"
+
+          app_uuid="$(node --input-type=module - "$RUNNER_TEMP/coolify-apps.json" "$APP_REPOSITORY" "$APP_BRANCH" <<'NODE'
+          import fs from 'node:fs';
+          const [file, repository, branch] = process.argv.slice(2);
+          const normalize = (value = '') => value.toLowerCase().replace(/^https?:\/\//, '').replace(/^git@github\.com:/, '').replace(/^github\.com\//, '').replace(/\.git$/, '').replace(/\/$/, '');
+          const wanted = normalize(repository);
+          const apps = JSON.parse(fs.readFileSync(file, 'utf8'));
+          const matches = apps.filter(app => normalize(app.git_repository) === wanted && app.git_branch === branch);
+          if (matches.length !== 1 || !matches[0].uuid) {
+            console.error(`Expected one Coolify app for ${repository} on ${branch}; found ${matches.length}. No changes made.`);
+            process.exit(1);
+          }
+          process.stdout.write(matches[0].uuid);
+          NODE
+          )"
+          echo "::add-mask::$app_uuid"
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/applications/$app_uuid" > "$RUNNER_TEMP/coolify-app.json"
+          node --input-type=module - "$RUNNER_TEMP/coolify-app.json" "$RUNNER_TEMP/coolify-domain.json" "$CAMPAIGNS_DOMAIN" <<'NODE'
+          import fs from 'node:fs';
+          const [source, destination, domain] = process.argv.slice(2);
+          const app = JSON.parse(fs.readFileSync(source, 'utf8'));
+          const existing = app.domains ?? app.fqdn ?? '';
+          const domains = (Array.isArray(existing) ? existing : String(existing).split(','))
+            .map(value => value.trim()).filter(Boolean);
+          const normalized = domain.replace(/\/$/, '').toLowerCase();
+          if (!domains.some(value => value.replace(/\/$/, '').toLowerCase() === normalized)) domains.push(domain);
+          fs.writeFileSync(destination, JSON.stringify({ domains: domains.join(',') }));
+          NODE
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --request PATCH "${headers[@]}" --header 'Content-Type: application/json' \
+            --data-binary "@$RUNNER_TEMP/coolify-domain.json" "$api/applications/$app_uuid" \
+            > "$RUNNER_TEMP/coolify-domain-update.json"
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" \
+            "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-envs.json"
+          env_uuid="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" <<'NODE'
+          import fs from 'node:fs';
+          const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const matches = envs.filter(value => value.key === 'BETTER_AUTH_URL');
+          if (matches.length > 1) { console.error('Coolify has duplicate BETTER_AUTH_URL entries.'); process.exit(1); }
+          process.stdout.write(matches[0]?.uuid ?? '');
+          NODE
+          )"
+          if [ -n "$env_uuid" ]; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --request PATCH "${headers[@]}" --header 'Content-Type: application/json' \
+              --data '{"key":"BETTER_AUTH_URL","value":"https://campaign.mkety.com","is_literal":true,"is_runtime":true,"is_buildtime":false}' \
+              "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-env-update.json"
+          else
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --request POST "${headers[@]}" --header 'Content-Type: application/json' \
+              --data '{"key":"BETTER_AUTH_URL","value":"https://campaign.mkety.com","is_literal":true,"is_runtime":true,"is_buildtime":false,"is_preview":false}' \
+              "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-env-create.json"
+          fi
+
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            --request POST "${headers[@]}" "$api/applications/$app_uuid/start?instant_deploy=true" \
+            > "$RUNNER_TEMP/coolify-deploy.json"
+          echo "Coolify domain configured and deployment requested for campaign.mkety.com."
