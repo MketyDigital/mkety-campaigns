@@ -5,6 +5,7 @@ export type CampaignDeliveryJob = {
   tenantId: string;
   campaignId: string;
   contactId: string;
+  provider: EmailSendResult["provider"];
   idempotencyKey: string;
   from: string;
   to: string;
@@ -30,7 +31,7 @@ const UNCERTAIN_REASON = "Provider outcome is uncertain; reconcile before retryi
 
 export function createEmailCampaignWorker(
   repository: CampaignDeliveryRepository,
-  provider: EmailProvider,
+  providers: EmailProvider | EmailProvider[],
   enabled: boolean,
 ): EmailCampaignWorker {
   return {
@@ -38,6 +39,11 @@ export function createEmailCampaignWorker(
       if (!enabled) return false;
       const job = await repository.claimNext();
       if (!job) return false;
+      const provider = Array.isArray(providers) ? providers.find((candidate) => candidate.name === job.provider) : providers.name === job.provider ? providers : undefined;
+      if (!provider) {
+        await repository.markUncertain(job.id, "The selected sender provider is not configured.");
+        return true;
+      }
       try {
         const result = await provider.send({
           idempotencyKey: job.idempotencyKey,

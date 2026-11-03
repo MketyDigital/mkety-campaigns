@@ -10,6 +10,7 @@ type DomainRow = {
   id: string;
   tenant_id: string;
   domain_name: string;
+  provider: "acs-email" | "oci-email-delivery";
   azure_resource_id: string | null;
   provisioning_state: string;
   verification_records_json: string;
@@ -23,7 +24,7 @@ export class PostgresDomainRepository implements DomainRepository {
 
   async list(tenantId: string): Promise<TenantEmailDomain[]> {
     const result = await this.database.query<DomainRow>(
-      `SELECT id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
               verification_records_json, verification_states_json, linked, updated_at
          FROM tenant_email_domains WHERE tenant_id = $1 ORDER BY created_at DESC`,
       [tenantId],
@@ -33,7 +34,7 @@ export class PostgresDomainRepository implements DomainRepository {
 
   async get(tenantId: string, id: string): Promise<TenantEmailDomain | null> {
     const result = await this.database.query<DomainRow>(
-      `SELECT id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
               verification_records_json, verification_states_json, linked, updated_at
          FROM tenant_email_domains WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
       [tenantId, id],
@@ -44,11 +45,11 @@ export class PostgresDomainRepository implements DomainRepository {
   async insertPending(domain: NewTenantEmailDomain): Promise<TenantEmailDomain> {
     try {
       const result = await this.database.query<DomainRow>(
-        `INSERT INTO tenant_email_domains (id, tenant_id, domain_name)
-         VALUES ($1, $2, $3)
-         RETURNING id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+        `INSERT INTO tenant_email_domains (id, tenant_id, domain_name, provider)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
                    verification_records_json, verification_states_json, linked, updated_at`,
-        [domain.id, domain.tenantId, domain.domainName],
+        [domain.id, domain.tenantId, domain.domainName, domain.provider],
       );
       if (!result.rows[0]) throw new Error("Domain insert did not return a row");
       return mapRow(result.rows[0]);
@@ -68,7 +69,7 @@ export class PostgresDomainRepository implements DomainRepository {
               linked = $7,
               updated_at = NOW()
         WHERE tenant_id = $1 AND id = $2
-        RETURNING id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+        RETURNING id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
                   verification_records_json, verification_states_json, linked, updated_at`,
       [tenantId, id, state.azureResourceId, state.provisioningState, JSON.stringify(state.verificationRecords), JSON.stringify(state.verificationStates), state.linked],
     );
@@ -81,7 +82,7 @@ export class D1DomainRepository implements DomainRepository {
 
   async list(tenantId: string): Promise<TenantEmailDomain[]> {
     const result = await this.database.prepare(
-      `SELECT id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
               verification_records_json, verification_states_json, linked, updated_at
          FROM tenant_email_domains WHERE tenant_id = ?1 ORDER BY created_at DESC`,
     ).bind(tenantId).all<DomainRow>();
@@ -90,7 +91,7 @@ export class D1DomainRepository implements DomainRepository {
 
   async get(tenantId: string, id: string): Promise<TenantEmailDomain | null> {
     const result = await this.database.prepare(
-      `SELECT id, tenant_id, domain_name, azure_resource_id, provisioning_state,
+      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
               verification_records_json, verification_states_json, linked, updated_at
          FROM tenant_email_domains WHERE tenant_id = ?1 AND id = ?2 LIMIT 1`,
     ).bind(tenantId, id).first<DomainRow>();
@@ -100,8 +101,8 @@ export class D1DomainRepository implements DomainRepository {
   async insertPending(domain: NewTenantEmailDomain): Promise<TenantEmailDomain> {
     try {
       await this.database.prepare(
-        `INSERT INTO tenant_email_domains (id, tenant_id, domain_name) VALUES (?1, ?2, ?3)`,
-      ).bind(domain.id, domain.tenantId, domain.domainName).run();
+        `INSERT INTO tenant_email_domains (id, tenant_id, domain_name, provider) VALUES (?1, ?2, ?3, ?4)`,
+      ).bind(domain.id, domain.tenantId, domain.domainName, domain.provider).run();
     } catch (error) {
       if (isD1UniqueViolation(error)) throw new DomainConflictError();
       throw error;
@@ -131,6 +132,7 @@ function mapRow(row: DomainRow): TenantEmailDomain {
     id: row.id,
     tenantId: row.tenant_id,
     domainName: row.domain_name,
+    provider: row.provider,
     azureResourceId: row.azure_resource_id,
     provisioningState: row.provisioning_state,
     verificationRecords: parseJson(row.verification_records_json),

@@ -15,7 +15,7 @@ The system sends permission-based email campaigns and, after sender and country 
 - Provide Mkety Ops administration and one authorized business seat per approved tenant. No invitations or child accounts; transfers are operator-controlled and require MFA reset.
 - Enforce tenant ownership on every request, query, job, webhook, and export.
 - Support consent records, contact imports, tags/segments, templates, approval, scheduling, unsubscribe and suppression, delivery events, audit history, rate limits, budget guards, and emergency stop.
-- Implement Azure Communication Services Email first and keep OCI Email Delivery available but disabled until an Ops administrator validates and enables it. Include an SMS provider interface and an initial third-party adapter candidate; do not use ACS SMS. Gate SMS on provider sender availability, country rules, consent, quotas, and explicit activation.
+- Implement Azure Communication Services Email as the default and keep OCI Email Delivery selectable through the adapter configuration. Include an SMS provider interface and an initial third-party adapter candidate; do not use ACS SMS. Gate SMS on provider sender availability, country rules, consent, quotas, and explicit activation.
 - Store operational objects in R2 and support optional encrypted backups to Azure Blob and OCI Object Storage.
 - Keep application routes and domain logic compatible with Web Standards, and maintain a D1-compatible database path without deploying D1 initially.
 - Do not send live campaigns or import customer lists until compliance, sender/domain checks, and explicit owner signoff are complete.
@@ -50,7 +50,7 @@ The owner selected the phased approach and asked to deliver the full roadmap in 
 ## Initial delivery stages
 
 1. **Foundation:** project scaffold, environment validation, secure session/MFA, tenant and single-seat authorization, PostgreSQL migrations, health checks, CI, Coolify container setup, and D1 compatibility contract tests.
-2. **Email pilot:** provider settings and health checks; domain onboarding and DNS records; contact import with opt-in evidence; tags/segments; templates and plain-text alternative; preview/test send; campaign draft/review/schedule; queue dispatch; delivery events; bounce/complaint/unsubscribe suppression; audit log, rate limits, budget guard, and emergency stop. OCI Email remains disabled by default.
+2. **Email pilot:** provider settings and health checks; domain onboarding and DNS records; contact import with opt-in evidence; tags/segments; templates and plain-text alternative; preview/test send; campaign draft/review/schedule; queue dispatch; delivery events; bounce/complaint/unsubscribe suppression; audit log, rate limits, budget guard, and emergency stop. ACS is the default adapter; OCI can be selected explicitly. Campaign delivery remains off by default.
 3. **SMS and backup:** implement the SMS adapter contract and evaluate a low-cost provider adapter (Telnyx is the current shortlist candidate; select by destination-country price, sender availability, and registration requirements before enabling). ACS SMS is not used. Test Azure Blob backup; build the OCI adapter behind a disabled feature flag, and validate restore/export workflows before any OCI uploads.
 4. **Cloudflare readiness:** verify Worker entry point and D1 migration/contract tests while keeping Coolify/PostgreSQL production. A cutover requires a separate owner decision after parity and restore validation.
 

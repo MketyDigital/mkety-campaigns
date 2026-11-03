@@ -1,14 +1,14 @@
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { D1DomainRepository } from "./domains/repository.js";
-import { createOptionalAzureDomainProvider } from "./domains/runtime.js";
+import { createOptionalEmailDomainProvider } from "./domains/runtime.js";
 import { createTenantDomainService } from "./domains/service.js";
 import { createTenantSenderService, D1SenderRepository } from "./domains/senders.js";
 import { D1CampaignWorkspace } from "./campaigns/repository.js";
 import { D1CampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import { createEmailCampaignWorker } from "./campaigns/delivery.js";
 import { D1OperationsService } from "./ops/service.js";
-import { createAcsEmailProvider } from "./email/providers.js";
+import { createOptionalEmailProviders, createSelectedEmailProvider } from "./email/providers.js";
 import { createEmailTestSender } from "./email/test-send.js";
 
 export default {
@@ -23,6 +23,13 @@ export default {
     AZURE_RESOURCE_GROUP?: string;
     AZURE_EMAIL_SERVICE_NAME?: string;
     AZURE_COMMUNICATION_SERVICE_NAME?: string;
+    OCI_EMAIL_ENDPOINT?: string;
+    OCI_EMAIL_REGION?: string;
+    OCI_EMAIL_TENANCY_OCID?: string;
+    OCI_EMAIL_USER_OCID?: string;
+    OCI_EMAIL_FINGERPRINT?: string;
+    OCI_EMAIL_PRIVATE_KEY?: string;
+    OCI_EMAIL_COMPARTMENT_OCID?: string;
     ACS_EMAIL_CONNECTION_STRING?: string;
     EMAIL_PROVIDER?: string;
     EMAIL_TEST_SEND_ENABLED?: string;
@@ -31,23 +38,24 @@ export default {
   }): Response | Promise<Response> {
     const auth = env.BETTER_AUTH_SECRET && env.BETTER_AUTH_URL ? createAuth(env.DB, env) : undefined;
     const domainRepository = new D1DomainRepository(env.DB);
-    let azureDomainProvider;
+    let emailDomainProvider;
     let domains;
     let senders;
     try {
-      azureDomainProvider = createOptionalAzureDomainProvider(env);
-      if (azureDomainProvider) {
-        domains = createTenantDomainService(domainRepository, azureDomainProvider);
-        senders = createTenantSenderService(domainRepository, new D1SenderRepository(env.DB), azureDomainProvider);
+      emailDomainProvider = createOptionalEmailDomainProvider(env);
+      if (emailDomainProvider) {
+        domains = createTenantDomainService(domainRepository, emailDomainProvider, (env.EMAIL_PROVIDER ?? "acs-email") as "acs-email" | "oci-email-delivery");
+        senders = createTenantSenderService(domainRepository, new D1SenderRepository(env.DB), emailDomainProvider, (env.EMAIL_PROVIDER ?? "acs-email") as "acs-email" | "oci-email-delivery");
       }
     } catch {
       // Workers have no process startup phase; keep health/auth routes available
-      // and leave domain endpoints disabled when Azure settings are incomplete.
+      // and leave domain endpoints disabled when provider settings are incomplete.
       domains = undefined;
       senders = undefined;
     }
-    const emailTestSender = env.EMAIL_TEST_SEND_ENABLED === "true" && env.EMAIL_PROVIDER === "acs-email" && env.ACS_EMAIL_CONNECTION_STRING
-      ? createEmailTestSender(new D1SenderRepository(env.DB), createAcsEmailProvider({ connectionString: env.ACS_EMAIL_CONNECTION_STRING }))
+    const emailProvider = createSelectedEmailProvider(env);
+    const emailTestSender = env.EMAIL_TEST_SEND_ENABLED === "true" && emailProvider
+      ? createEmailTestSender(new D1SenderRepository(env.DB), emailProvider)
       : undefined;
     const app = createApp(async () => {
       try {
@@ -92,13 +100,22 @@ export default {
   scheduled(_event: ScheduledController, env: {
     DB: D1Database;
     BETTER_AUTH_URL?: string;
-    ACS_EMAIL_CONNECTION_STRING?: string;
     EMAIL_PROVIDER?: string;
+    ACS_EMAIL_CONNECTION_STRING?: string;
+    OCI_EMAIL_ENDPOINT?: string;
+    OCI_EMAIL_REGION?: string;
+    OCI_EMAIL_TENANCY_OCID?: string;
+    OCI_EMAIL_USER_OCID?: string;
+    OCI_EMAIL_FINGERPRINT?: string;
+    OCI_EMAIL_PRIVATE_KEY?: string;
+    OCI_EMAIL_COMPARTMENT_OCID?: string;
     EMAIL_CAMPAIGN_SEND_ENABLED?: string;
   }, context: ExecutionContext): void {
-    if (env.EMAIL_CAMPAIGN_SEND_ENABLED !== "true" || env.EMAIL_PROVIDER !== "acs-email" || !env.ACS_EMAIL_CONNECTION_STRING || !env.BETTER_AUTH_URL) return;
+    if (env.EMAIL_CAMPAIGN_SEND_ENABLED !== "true" || !env.BETTER_AUTH_URL) return;
+    const providers = createOptionalEmailProviders(env);
+    if (!providers.length) return;
     const repository = new D1CampaignDispatchRepository(env.DB, env.BETTER_AUTH_URL);
-    const worker = createEmailCampaignWorker(repository, createAcsEmailProvider({ connectionString: env.ACS_EMAIL_CONNECTION_STRING }), true);
+    const worker = createEmailCampaignWorker(repository, providers, true);
     context.waitUntil(worker.processOne().then(() => undefined));
   },
 };

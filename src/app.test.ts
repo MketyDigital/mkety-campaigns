@@ -20,6 +20,7 @@ const sampleDomain: TenantEmailDomain = {
   id: "domain-1",
   tenantId: "tenant-authorized",
   domainName: "mail.example.com",
+  provider: "acs-email",
   azureResourceId: "/azure/domain-1",
   provisioningState: "Running",
   verificationRecords: { Domain: { type: "TXT", name: "@", value: "verify", ttl: 3600 } },

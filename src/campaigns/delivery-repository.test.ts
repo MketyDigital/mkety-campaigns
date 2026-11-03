@@ -47,12 +47,12 @@ class SqliteD1 {
   close() { this.db.close(); }
 }
 
-async function seedCampaign(db: SqliteD1, recipientCount = 1) {
+async function seedCampaign(db: SqliteD1, recipientCount = 1, provider: "acs-email" | "oci-email-delivery" = "acs-email") {
   const exec = async (sql: string, ...args: SQLInputValue[]) => db.prepare(sql).bind(...args).run();
   await exec("INSERT INTO tenants (id, name, status) VALUES ('tenant-1', 'Example', 'approved')");
   await exec("INSERT INTO users (id, email, display_name, role, two_factor_enabled, mfa_enrolled_at) VALUES ('ops-1', 'ops@example.com', 'Ops', 'ops', 1, CURRENT_TIMESTAMP)");
   await exec("INSERT INTO tenant_email_domains (id, tenant_id, domain_name, provisioning_state, linked) VALUES ('domain-1', 'tenant-1', 'mail.example.com', 'Succeeded', 1)");
-  await exec("INSERT INTO tenant_sender_identities (id, tenant_id, domain_id, sender_address, display_name, provider, status) VALUES ('sender-1', 'tenant-1', 'domain-1', 'info@mail.example.com', 'Updates', 'acs-email', 'ready')");
+  await exec("INSERT INTO tenant_sender_identities (id, tenant_id, domain_id, sender_address, display_name, provider, status) VALUES ('sender-1', 'tenant-1', 'domain-1', 'info@mail.example.com', 'Updates', ?1, 'ready')", provider);
   await exec("INSERT INTO campaigns (id, tenant_id, channel, status, sender_identity_id, subject, body_text) VALUES ('campaign-1', 'tenant-1', 'email', 'approved', 'sender-1', 'Welcome', 'Hello there')");
   for (let index = 1; index <= recipientCount; index++) {
     const contact = `contact-${index}`;
@@ -90,5 +90,16 @@ test("D1 dispatch rejects the whole queue when eligible recipients exceed the ca
     const status = await db.prepare("SELECT status FROM campaigns WHERE id = 'campaign-1'").first<{ status: string }>();
     assert.equal(jobs?.count, 0);
     assert.equal(status?.status, "approved");
+  } finally { db.close(); }
+});
+
+test("D1 campaign jobs retain and route the provider attached to the sender", async () => {
+  const db = new SqliteD1();
+  try {
+    await seedCampaign(db, 1, "oci-email-delivery");
+    const repository = new D1CampaignDispatchRepository(db as unknown as D1Database, "https://campaign.mkety.com");
+    assert.equal(await repository.queueApproved("campaign-1", "ops-1", 1), 1);
+    const job = await repository.claimNext();
+    assert.equal(job?.provider, "oci-email-delivery");
   } finally { db.close(); }
 });

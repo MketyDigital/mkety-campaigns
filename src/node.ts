@@ -3,14 +3,14 @@ import { Pool } from "pg";
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { PostgresDomainRepository } from "./domains/repository.js";
-import { createOptionalAzureDomainProvider } from "./domains/runtime.js";
+import { createOptionalEmailDomainProvider } from "./domains/runtime.js";
 import { createTenantDomainService } from "./domains/service.js";
 import { PostgresSenderRepository, createTenantSenderService } from "./domains/senders.js";
 import { PostgresCampaignWorkspace } from "./campaigns/repository.js";
 import { PostgresCampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import { createEmailCampaignWorker } from "./campaigns/delivery.js";
 import { PostgresOperationsService } from "./ops/service.js";
-import { createAcsEmailProvider } from "./email/providers.js";
+import { createOptionalEmailProviders, createSelectedEmailProvider } from "./email/providers.js";
 import { createEmailTestSender } from "./email/test-send.js";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -20,15 +20,18 @@ const auth = pool && process.env.BETTER_AUTH_SECRET && process.env.BETTER_AUTH_U
   ? createAuth(pool, process.env)
   : undefined;
 const domainRepository = pool ? new PostgresDomainRepository(pool) : undefined;
-const azureDomainProvider = createOptionalAzureDomainProvider(process.env);
-const domains = domainRepository && azureDomainProvider ? createTenantDomainService(domainRepository, azureDomainProvider) : undefined;
-const senders = domainRepository && pool && azureDomainProvider
-  ? createTenantSenderService(domainRepository, new PostgresSenderRepository(pool), azureDomainProvider)
+const emailProviderName = process.env.EMAIL_PROVIDER ?? "acs-email";
+const emailProviders = createOptionalEmailProviders(process.env);
+const emailProvider = createSelectedEmailProvider(process.env);
+const emailDomainProvider = createOptionalEmailDomainProvider(process.env);
+const domains = domainRepository && emailDomainProvider ? createTenantDomainService(domainRepository, emailDomainProvider, emailProviderName as "acs-email" | "oci-email-delivery") : undefined;
+const senders = domainRepository && pool && emailDomainProvider
+  ? createTenantSenderService(domainRepository, new PostgresSenderRepository(pool), emailDomainProvider, emailProviderName as "acs-email" | "oci-email-delivery")
   : undefined;
 const emailTestSender = process.env.EMAIL_TEST_SEND_ENABLED === "true"
-  ? pool && process.env.EMAIL_PROVIDER === "acs-email" && process.env.ACS_EMAIL_CONNECTION_STRING
-    ? createEmailTestSender(new PostgresSenderRepository(pool), createAcsEmailProvider({ connectionString: process.env.ACS_EMAIL_CONNECTION_STRING }))
-    : (() => { throw new Error("Email test send requires EMAIL_PROVIDER=acs-email and ACS_EMAIL_CONNECTION_STRING"); })()
+  ? pool && emailProvider
+    ? createEmailTestSender(new PostgresSenderRepository(pool), emailProvider)
+    : (() => { throw new Error("Email test send requires a configured EMAIL_PROVIDER"); })()
   : undefined;
 const workspace = pool ? new PostgresCampaignWorkspace(pool) : undefined;
 const campaignDispatchEnabled = process.env.EMAIL_CAMPAIGN_SEND_ENABLED === "true";
@@ -36,11 +39,11 @@ const campaignRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_MAX_RECIPIENTS 
 const campaignDispatch = campaignDispatchEnabled && pool && process.env.BETTER_AUTH_URL
   ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL)
   : undefined;
-if (campaignDispatchEnabled && (!pool || !process.env.BETTER_AUTH_URL || process.env.EMAIL_PROVIDER !== "acs-email" || !process.env.ACS_EMAIL_CONNECTION_STRING)) {
-  throw new Error("Campaign sending requires DATABASE_URL, BETTER_AUTH_URL, EMAIL_PROVIDER=acs-email, and ACS_EMAIL_CONNECTION_STRING");
+if (campaignDispatchEnabled && (!pool || !process.env.BETTER_AUTH_URL || !emailProvider)) {
+  throw new Error("Campaign sending requires DATABASE_URL, BETTER_AUTH_URL, and a configured EMAIL_PROVIDER");
 }
-const campaignWorker = campaignDispatchEnabled && campaignDispatch && process.env.ACS_EMAIL_CONNECTION_STRING
-  ? createEmailCampaignWorker(campaignDispatch, createAcsEmailProvider({ connectionString: process.env.ACS_EMAIL_CONNECTION_STRING }), true)
+const campaignWorker = campaignDispatchEnabled && campaignDispatch && emailProvider
+  ? createEmailCampaignWorker(campaignDispatch, emailProviders, true)
   : undefined;
 const operations = pool && process.env.BETTER_AUTH_URL
   ? new PostgresOperationsService(pool, process.env.BETTER_AUTH_URL)

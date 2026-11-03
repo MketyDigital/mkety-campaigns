@@ -4,6 +4,7 @@ import {
   createAcsEmailProvider,
   createOptionalEmailProviders,
   createOciEmailProvider,
+  createSelectedEmailProvider,
   type CampaignEmail,
 } from "./providers.js";
 
@@ -109,6 +110,18 @@ test("OCI provider signs and submits through the HTTPS endpoint", async () => {
   ), true);
 });
 
+test("OCI provider accepts the traditional RSA PEM format output by openssl genrsa", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const generated = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const privateKey = generated.privateKey.export({ type: "pkcs1", format: "pem" }).toString();
+  const provider = createOciEmailProvider({
+    endpoint: "https://cell1.submit.email.eu-frankfurt-1.oci.oraclecloud.com", region: "eu-frankfurt-1",
+    tenancyOcid: "tenancy", userOcid: "user", fingerprint: "01:02", privateKey, compartmentOcid: "compartment",
+    fetcher: async () => new Response(JSON.stringify({ messageId: "accepted" }), { status: 202 }),
+  });
+  assert.equal((await provider.send(message)).providerMessageId, "accepted");
+});
+
 test("providers surface service failures without echoing credentials", async () => {
   const provider = createAcsEmailProvider({
     connectionString: "endpoint=https://example.communication.azure.com;accesskey=dG9wLXNlY3JldA==",
@@ -124,6 +137,19 @@ test("email providers remain disabled without credentials and reject partial set
     ACS_EMAIL_CONNECTION_STRING: "endpoint=https://x.communication.azure.com;accesskey=YQ==",
   }).length, 1);
   assert.throws(() => createOptionalEmailProviders({ OCI_EMAIL_ENDPOINT: "https://oci.example" }), /partially configured/);
+});
+
+test("email provider selection allows ACS and OCI credentials while selecting only the configured adapter", () => {
+  const selected = createSelectedEmailProvider({
+    EMAIL_PROVIDER: "oci-email-delivery",
+    ACS_EMAIL_CONNECTION_STRING: "endpoint=https://x.communication.azure.com;accesskey=YQ==",
+    OCI_EMAIL_ENDPOINT: "https://cell1.submit.email.eu-frankfurt-1.oci.oraclecloud.com",
+    OCI_EMAIL_REGION: "eu-frankfurt-1", OCI_EMAIL_TENANCY_OCID: "tenancy", OCI_EMAIL_USER_OCID: "user",
+    OCI_EMAIL_FINGERPRINT: "01:02", OCI_EMAIL_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----",
+    OCI_EMAIL_COMPARTMENT_OCID: "compartment",
+  });
+  assert.equal(selected?.name, "oci-email-delivery");
+  assert.throws(() => createSelectedEmailProvider({ EMAIL_PROVIDER: "oci-email-delivery" }), /not fully configured/);
 });
 
 async function makeTestKeyPair() {

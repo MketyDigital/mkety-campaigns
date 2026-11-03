@@ -7,7 +7,7 @@ export type SenderIdentity = {
   domainId: string;
   senderAddress: string;
   displayName: string;
-  provider: "acs-email";
+  provider: "acs-email" | "oci-email-delivery";
   status: "ready" | "pending";
   createdAt: string;
 };
@@ -42,6 +42,7 @@ export function createTenantSenderService(
   domains: DomainRepository,
   repository: SenderRepository,
   provider: AzureCommunicationDomains,
+  providerName: SenderIdentity["provider"] = "acs-email",
 ): TenantSenderService {
   return {
     list: (tenantId) => repository.list(tenantId),
@@ -51,7 +52,7 @@ export function createTenantSenderService(
       if (!sender) return null;
       if (sender.status === "ready") return sender;
       const domain = await domains.get(tenantId, sender.domainId);
-      if (!domain || !isReady(domain)) throw new SenderDomainNotReadyError();
+      if (!domain || domain.provider !== providerName || !isReady(domain)) throw new SenderDomainNotReadyError();
       const username = sender.senderAddress.slice(0, sender.senderAddress.lastIndexOf("@"));
       let remote;
       try {
@@ -64,7 +65,7 @@ export function createTenantSenderService(
     },
     async create(tenantId, domainId, username, displayName) {
       const domain = await domains.get(tenantId, domainId);
-      if (!domain || !isReady(domain)) throw new SenderDomainNotReadyError();
+      if (!domain || domain.provider !== providerName || !isReady(domain)) throw new SenderDomainNotReadyError();
       const localPart = username.trim().toLowerCase();
       if (!/^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/.test(localPart)) {
         throw new SenderInputError("Enter a valid sender username");
@@ -82,7 +83,7 @@ export function createTenantSenderService(
         id: crypto.randomUUID(), tenantId, domainId,
         senderAddress: `${localPart}@${domain.domainName}`,
         displayName: remote.displayName || name,
-        provider: "acs-email", status: state,
+        provider: providerName, status: state,
         createdAt: new Date().toISOString(),
       });
     },
@@ -97,7 +98,7 @@ function isReady(domain: Awaited<ReturnType<DomainRepository["get"]>>): boolean 
 
 type SenderRow = {
   id: string; tenant_id: string; domain_id: string; sender_address: string;
-  display_name: string; provider: "acs-email"; status: "ready" | "pending"; created_at: Date | string;
+  display_name: string; provider: SenderIdentity["provider"]; status: "ready" | "pending"; created_at: Date | string;
 };
 
 export class PostgresSenderRepository implements SenderRepository {

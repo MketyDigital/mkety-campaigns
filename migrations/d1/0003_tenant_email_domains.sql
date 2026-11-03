@@ -4,6 +4,7 @@ CREATE TABLE tenant_email_domains (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   domain_name TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL DEFAULT 'acs-email' CHECK (provider IN ('acs-email', 'oci-email-delivery')),
   azure_resource_id TEXT,
   provisioning_state TEXT NOT NULL DEFAULT 'Pending',
   verification_records_json TEXT NOT NULL DEFAULT '{}',

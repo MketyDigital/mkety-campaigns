@@ -1,6 +1,6 @@
 # MKETY Campaigns — Standalone Architecture & Roadmap
 
-Status: CUSTOMER PORTAL FOUNDATION + GATED ACS EMAIL CAMPAIGN DELIVERY. Owner: MKETY Ops. Updated: 2026-11-03.
+Status: CUSTOMER PORTAL FOUNDATION + GATED ACS/OCI EMAIL CAMPAIGN DELIVERY. Owner: MKETY Ops. Updated: 2026-11-03.
 
 ## Current build
 - One TypeScript/Hono application with shared routes and separate Node and Cloudflare Workers entry points.
@@ -10,10 +10,10 @@ Status: CUSTOMER PORTAL FOUNDATION + GATED ACS EMAIL CAMPAIGN DELIVERY. Owner: M
 - SMS uses a provider-neutral contract with a Telnyx adapter. It remains off by default; ACS SMS is not in the initial lineup. Destination-country pricing and sender eligibility are required before activation.
 - Initial migrations define tenant seats, consent, contacts, suppression, campaigns, idempotent jobs, delivery attempts, archive manifests, and audit records.
 - Better Auth provides invite-only email/password sign-in and TOTP/backup-code MFA. Tenant API routes and the `/app` dashboard fail closed unless the session has MFA enabled, was created after MFA enrollment, and the user has one active seat on an approved tenant.
-- ACS Email and OCI Email Delivery HTTPS provider adapters accept a per-message sender, with mocked-request signing tests. Provider credentials are platform-level. Azure email-domain creation, DNS verification, linking, sender username provisioning, and a gated owner-only ACS test send are exposed in the tenant portal.
+- ACS Email and OCI Email Delivery adapters are available as platform-managed providers. Portal domain setup provisions and checks domains and senders through the provider selected by `EMAIL_PROVIDER`; sender records persist their provider and the campaign worker routes each job to that adapter. ACS uses Azure Resource Manager. OCI creates Email Delivery domains and DKIM records, displays required SPF/DKIM DNS records, checks verification, and creates approved senders using the OCI signing key.
 - The portal includes customer invitations, Azure sender-domain setup, consent-evidenced manual/CSV contact imports, channel-specific consent withdrawal and suppression, campaign drafts with optional planned send times, tenant review submission, and MFA-protected Ops approval. Approval never sends.
 - Email delivery has a durable per-recipient queue for approved email campaigns, an explicit MFA Ops queue action, last-moment consent/suppression checks, opaque unsubscribe tokens and one-click unsubscribe, a recipient cap, stable idempotency keys, and manual review for uncertain provider results. The Coolify Node worker processes one job at a time. Campaign sending remains off unless `EMAIL_CAMPAIGN_SEND_ENABLED=true`.
-- The first campaign sender path is ACS Email. OCI Email Delivery request signing exists, but customer-domain provisioning and OCI sender selection are not yet connected to the campaign portal. Templates, bounce/complaint reconciliation, usage budgets, segments, and automated backup/restore jobs remain future work.
+- `EMAIL_PROVIDER` selects the provider used for new domain and sender onboarding and for the fixed owner test-send. Existing senders retain their provider; campaign workers can route to every fully configured provider. Templates, bounce/complaint reconciliation, usage budgets, segments, and automated backup/restore jobs remain future work.
 
 ### Run locally
 1. Copy `.env.example` to `.env` and set `DATABASE_URL` to a dedicated development PostgreSQL database.
@@ -42,7 +42,7 @@ See [Storage credential setup](docs/storage-credentials.md) for the exact values
 - Campaign sending stays off by default. Before enabling the gate, verify domain ownership/DNS, sender readiness, documented permission, and the test recipient. The independent ACS sender-test action sends only one fixed message to the signed-in account email.
 
 ## Channels & delivery-provider configuration
-- Email: Azure Communication Services (ACS) Email and OCI Email Delivery HTTPS adapters are implemented behind a provider contract. The portal provisions tenant sender usernames under verified, linked Azure domains and supports a fixed test message to the signed-in owner when `EMAIL_TEST_SEND_ENABLED=true`. Sender From and test recipient are resolved server-side. The approved ACS campaign path uses an Ops queue action, a maximum recipient count, consent/suppression checks, one-click unsubscribe, and a single-job worker. OCI has its signed send adapter but still needs portal domain/sender onboarding before campaign routing can use it.
+- Email: ACS and OCI Email Delivery adapters are selectable with `EMAIL_PROVIDER=acs-email` or `EMAIL_PROVIDER=oci-email-delivery`. Portal domain/sender onboarding, server-resolved From addresses, owner-only test-send, approved-campaign queueing, consent/suppression checks, one-click unsubscribe, and provider-routed single-job workers support both. OCI and ACS credentials stay on the server and are never exposed to tenants.
 - Portal hostname: `campaign.mkety.com` is the app URL; it does not restrict the From address. `info@mkety.com` can be used after the root domain is verified and authenticated at the selected provider. Since MKETY Mail already uses the root domain, review its DNS first, preserve its MX records, and merge any provider authorization into existing SPF/DKIM/DMARC setup. A dedicated marketing subdomain offers better reputation isolation.
 - SMS: implement provider-neutral SMS support and select adapters by target-country cost, sender eligibility, and registration requirements. ACS SMS is not used in the initial provider lineup. SMS remains off until the provider, sender, consent, country checks, and spending limits are approved.
 - Never silently retry an uncertain delivery through a second provider. Current uncertain outcomes stop for operator review; idempotency does not imply a provider can guarantee exactly-once mailbox delivery.
@@ -62,12 +62,12 @@ See [Storage credential setup](docs/storage-credentials.md) for the exact values
 ## Target architecture
 Standalone UI + authenticated API + isolated database + durable job queue + worker + events processor.
 Modules: tenants, single business access seat, contacts, consent, domains, templates, campaigns, delivery_attempts, provider_profiles, suppression, events, quotas/billing, audit.
-Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. OCI Email is disabled until Ops enables it; SMS uses provider-neutral adapters and does not assume ACS. State machine must be idempotent and replay-safe.
+Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. The email adapter is selected by the deployment environment; SMS and OCI Object Storage backup stay disabled. State transitions are idempotent and replay-safe.
 
 ## Phases / acceptance gates
 0. Verify Azure sponsorship, ACS resource linkage, email domain support, SMS country/number eligibility, provider quotas, subscription limitations, and independent hosting plan. No customer uploads.
 1. Complete standalone foundation, CI/test environment, authentication/MFA, tenant-bound authorization, and no integrations to existing MKETY production. The app shell, migrations, invite-only auth, TOTP gate, and provider interfaces are in place; database-level RLS, full admin onboarding, and customer-data endpoints are not.
-2. The durable ACS email queue and worker are implemented behind `EMAIL_CAMPAIGN_SEND_ENABLED=false`. Run a one-recipient test with an opted-in test contact, then implement provider event reconciliation and the OCI portal sender path.
+2. ACS and OCI domain/sender onboarding, the consent-aware email queue, and provider-routed worker are implemented behind `EMAIL_CAMPAIGN_SEND_ENABLED=false`. Run a one-recipient test with an opted-in test contact; provider event reconciliation remains future work.
 3. Build domain onboarding, consent-aware CSV imports, suppression, templates, campaigns, operator review, scheduling, quotas and audit logs.
 4. Build provider-neutral SMS onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates. ACS SMS is not part of the initial provider lineup.
 5. Closed pilot: MKETY test domain, permission-based contacts, small batches; production smoke tests and rollback.
@@ -77,4 +77,4 @@ Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveD
 No mailbox hosting or reply inbox, no general CRM, no team/employee invitation tree, no changes to MKETY Mail, no automated marketing to imported lists without evidence of permission.
 
 ## Operational notes
-Existing Azure resources reported by owner: Email Communication Services and Communication Services resources. OCI Email Delivery requires sender-domain authorization. Never commit credentials or expose them in logs. Keep provider credentials in Coolify runtime secrets. Ordinary CI uses mocked provider calls and never sends email. Portal-managed Azure email-domain creation requires a separate Entra identity with a custom role scoped to the Email Service and Communication Service resources. Document DNS entries only after Azure creates the domain.
+Existing Azure resources reported by owner: Email Communication Services and Communication Services resources. OCI Email Delivery domain setup requires the app's scoped Email Delivery IAM permissions and DNS authorization. Never commit credentials or expose them in logs. Keep provider credentials in Coolify runtime secrets. Ordinary CI uses mocked provider calls and never sends email. ACS portal-managed domain creation requires the separately scoped Entra identity. OCI domain setup creates DNS instructions in the portal and activates senders only after SPF and DKIM verify.

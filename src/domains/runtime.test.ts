@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DomainRepository } from "./service.js";
-import { createOptionalTenantDomainService } from "./runtime.js";
+import { createOptionalEmailDomainProvider, createOptionalTenantDomainService } from "./runtime.js";
 
 const repository = {} as DomainRepository;
 
@@ -28,4 +28,19 @@ test("domain runtime wires the service when all Azure ARM settings are present",
   });
   assert.ok(service);
   assert.equal(typeof service.create, "function");
+});
+
+test("OCI domain runtime rejects incomplete management credentials", () => {
+  assert.throws(() => createOptionalEmailDomainProvider({ EMAIL_PROVIDER: "oci-email-delivery", OCI_EMAIL_REGION: "eu-frankfurt-1" }), /OCI Email Delivery domain management configuration is incomplete/);
+});
+
+test("OCI domain runtime is selected with the OCI Email Delivery adapter", () => {
+  const provider = createOptionalEmailDomainProvider({
+    EMAIL_PROVIDER: "oci-email-delivery", OCI_EMAIL_REGION: "eu-frankfurt-1", OCI_EMAIL_TENANCY_OCID: "tenancy",
+    OCI_EMAIL_USER_OCID: "user", OCI_EMAIL_FINGERPRINT: "01:02", OCI_EMAIL_PRIVATE_KEY: "pem",
+    OCI_EMAIL_COMPARTMENT_OCID: "compartment",
+  });
+  assert.ok(provider);
+  assert.equal(typeof provider.createDomain, "function");
+  assert.equal(typeof provider.createSenderUsername, "function");
 });

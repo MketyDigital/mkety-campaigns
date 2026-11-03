@@ -1,3 +1,5 @@
+import { importOciRsaPrivateKey } from "./oci-crypto.js";
+
 export type CampaignEmail = {
   /** Stable delivery job key used to make provider requests retry-safe where supported. */
   idempotencyKey: string;
@@ -143,7 +145,7 @@ export function createOciEmailProvider(config: {
         "content-type: application/json",
         `x-content-sha256: ${contentHash}`,
       ].join("\n");
-      const key = await importOciPrivateKey(privateKey);
+      const key = await importOciRsaPrivateKey(privateKey);
       const signature = bytesToBase64(new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(signingString))));
       const response = await fetcher(url, {
         method: "POST",
@@ -170,7 +172,8 @@ export function createOciEmailProvider(config: {
   };
 }
 
-export function createOptionalEmailProviders(env: Record<string, string | undefined>): EmailProvider[] {
+export function createOptionalEmailProviders(env: Record<string, unknown>): EmailProvider[] {
+  const values = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string")) as Record<string, string>;
   const acsKeys = ["ACS_EMAIL_CONNECTION_STRING"] as const;
   const ociKeys = [
     "OCI_EMAIL_ENDPOINT",
@@ -182,35 +185,39 @@ export function createOptionalEmailProviders(env: Record<string, string | undefi
     "OCI_EMAIL_COMPARTMENT_OCID",
   ] as const;
   const enabled = (name: string, keys: readonly string[]) => {
-    const present = keys.filter((key) => Boolean(env[key]));
+    const present = keys.filter((key) => Boolean(values[key]));
     if (present.length > 0 && present.length !== keys.length) {
-      throw new Error(`${name} email provider is partially configured; missing: ${keys.filter((key) => !env[key]).join(", ")}`);
+      throw new Error(`${name} email provider is partially configured; missing: ${keys.filter((key) => !values[key]).join(", ")}`);
     }
     return present.length === keys.length;
   };
 
   const providers: EmailProvider[] = [];
   if (enabled("ACS", acsKeys)) {
-    providers.push(createAcsEmailProvider({ connectionString: env.ACS_EMAIL_CONNECTION_STRING! }));
+    providers.push(createAcsEmailProvider({ connectionString: values.ACS_EMAIL_CONNECTION_STRING! }));
   }
   if (enabled("OCI", ociKeys)) {
     providers.push(createOciEmailProvider({
-      endpoint: env.OCI_EMAIL_ENDPOINT!,
-      region: env.OCI_EMAIL_REGION!,
-      tenancyOcid: env.OCI_EMAIL_TENANCY_OCID!,
-      userOcid: env.OCI_EMAIL_USER_OCID!,
-      fingerprint: env.OCI_EMAIL_FINGERPRINT!,
-      privateKey: env.OCI_EMAIL_PRIVATE_KEY!,
-      compartmentOcid: env.OCI_EMAIL_COMPARTMENT_OCID!,
+      endpoint: values.OCI_EMAIL_ENDPOINT!,
+      region: values.OCI_EMAIL_REGION!,
+      tenancyOcid: values.OCI_EMAIL_TENANCY_OCID!,
+      userOcid: values.OCI_EMAIL_USER_OCID!,
+      fingerprint: values.OCI_EMAIL_FINGERPRINT!,
+      privateKey: values.OCI_EMAIL_PRIVATE_KEY!,
+      compartmentOcid: values.OCI_EMAIL_COMPARTMENT_OCID!,
     }));
   }
   return providers;
 }
 
-async function importOciPrivateKey(pem: string): Promise<CryptoKey> {
-  const match = pem.trim().match(/^-----BEGIN PRIVATE KEY-----([\s\S]+?)-----END PRIVATE KEY-----$/);
-  if (!match) throw new Error("OCI_EMAIL_PRIVATE_KEY must be an unencrypted PKCS#8 PEM private key");
-  return crypto.subtle.importKey("pkcs8", toArrayBuffer(base64ToBytes(match[1])), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+export function createSelectedEmailProvider(env: Record<string, unknown>): EmailProvider | undefined {
+  const values = Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === "string")) as Record<string, string>;
+  const configured = createOptionalEmailProviders(values);
+  const selected = values.EMAIL_PROVIDER ?? (configured.length > 1 ? "acs-email" : undefined);
+  if (!selected) return configured[0];
+  const provider = configured.find((candidate) => candidate.name === selected);
+  if (!provider) throw new Error(`EMAIL_PROVIDER=${selected} is not fully configured`);
+  return provider;
 }
 
 async function deterministicUuid(value: string): Promise<string> {

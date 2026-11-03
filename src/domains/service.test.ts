@@ -128,7 +128,7 @@ test("allows a tenant to retry a domain after transient Azure creation failure",
   });
   const service = createTenantDomainService(store, arm);
 
-  await assert.rejects(service.create("tenant-1", "example.com"), /Azure could not provision/);
+  await assert.rejects(service.create("tenant-1", "example.com"), /selected email provider could not provision/);
   const failed = store.rows[0]!;
   assert.equal(failed.provisioningState, "Failed");
   fail = false;

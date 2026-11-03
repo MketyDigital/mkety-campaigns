@@ -5,7 +5,7 @@ import type { EmailProvider } from "../email/providers.js";
 
 const job: CampaignDeliveryJob = {
   id: "job-1", tenantId: "tenant-1", campaignId: "campaign-1", contactId: "contact-1",
-  idempotencyKey: "campaign-1:contact-1", from: "info@mail.example.com", to: "person@example.com",
+  idempotencyKey: "campaign-1:contact-1", from: "info@mail.example.com", provider: "acs-email", to: "person@example.com",
   subject: "Hello", bodyText: "Thanks for subscribing.", unsubscribeUrl: `https://campaign.mkety.com/unsubscribe?token=${"a".repeat(43)}`,
 };
 
@@ -42,6 +42,21 @@ test("campaign worker marks provider errors uncertain and never retries automati
   assert.equal(await worker.processOne(), false);
   assert.equal(attempts, 1);
   assert.equal(repository.uncertain[0]?.id, job.id);
+});
+
+test("campaign worker routes a sender through its stored OCI adapter", async () => {
+  let sent = false;
+  const oci: EmailProvider = { name: "oci-email-delivery", async send() { sent = true; return { provider: "oci-email-delivery", acceptedAt: "2026-11-03T12:00:00.000Z" }; } };
+  const repository = fakeRepository({ async claimNext() { return { ...job, provider: "oci-email-delivery" }; } });
+  await createEmailCampaignWorker(repository, [fakeProvider(), oci], true).processOne();
+  assert.equal(sent, true);
+  assert.equal(repository.accepted[0]?.providerMessageId, undefined);
+});
+
+test("campaign worker marks an OCI sender uncertain when OCI credentials are absent", async () => {
+  const repository = fakeRepository({ async claimNext() { return { ...job, provider: "oci-email-delivery" }; } });
+  await createEmailCampaignWorker(repository, fakeProvider(), true).processOne();
+  assert.match(repository.uncertain[0]?.error ?? "", /provider is not configured/i);
 });
 
 function fakeProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {

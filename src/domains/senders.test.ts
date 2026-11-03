@@ -5,7 +5,7 @@ import type { DomainRepository, TenantEmailDomain } from "./service.js";
 import type { AzureCommunicationDomains } from "./azure-arm.js";
 
 const verifiedDomain: TenantEmailDomain = {
-  id: "domain-1", tenantId: "tenant-1", domainName: "mail.example.com", azureResourceId: "/domain/1",
+  id: "domain-1", tenantId: "tenant-1", domainName: "mail.example.com", provider: "acs-email", azureResourceId: "/domain/1",
   provisioningState: "Succeeded", linked: true,
   verificationRecords: { Domain: { type: "TXT", name: "@", value: "proof" }, SPF: { type: "TXT", name: "@", value: "spf" } },
   verificationStates: { Domain: { status: "Verified" }, SPF: { status: "Verified" } },

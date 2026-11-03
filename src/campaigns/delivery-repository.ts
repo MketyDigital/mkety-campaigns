@@ -28,7 +28,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       assertQueueable(campaign);
       const sender = await client.query<{ id: string }>(
         `SELECT id FROM tenant_sender_identities
-          WHERE id = $1 AND tenant_id = $2 AND status = 'ready' AND provider = 'acs-email'`,
+          WHERE id = $1 AND tenant_id = $2 AND status = 'ready'`,
         [campaign.sender_identity_id, campaign.tenant_id]);
       if (!sender.rows.length) throw new CampaignDispatchConflictError("Campaign sender is not ready");
       const contacts = await client.query<{ id: string }>(`${eligibleContactsSql("$1")} ORDER BY ct.created_at, ct.id LIMIT $2`, [campaign.tenant_id, limit + 1]);
@@ -71,14 +71,14 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       await client.query(suppressIneligibleJobsSql("NOW()"));
       const result = await client.query<DeliveryJobRow>(
         `SELECT cj.id, cj.tenant_id, cj.campaign_id, cj.contact_id, cj.idempotency_key,
-                si.sender_address, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token
+                si.sender_address, si.provider, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token
            FROM campaign_jobs cj
            JOIN campaigns c ON c.id = cj.campaign_id AND c.tenant_id = cj.tenant_id
            JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
            JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
-            AND c.channel = 'email' AND si.status = 'ready' AND si.provider = 'acs-email'
+            AND c.channel = 'email' AND si.status = 'ready'
             AND ${activeConsentSql("cj", "ct")}
             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.tenant_id = cj.tenant_id AND sp.channel = 'email' AND sp.address_normalized = LOWER(ct.email))
           ORDER BY cj.available_at, cj.created_at
@@ -165,7 +165,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
     ).bind(campaignId).first<DispatchCampaignRow>();
     assertQueueable(campaign);
     const sender = await this.database.prepare(
-      `SELECT id FROM tenant_sender_identities WHERE id = ?1 AND tenant_id = ?2 AND status = 'ready' AND provider = 'acs-email'`,
+      `SELECT id FROM tenant_sender_identities WHERE id = ?1 AND tenant_id = ?2 AND status = 'ready'`,
     ).bind(campaign.sender_identity_id, campaign.tenant_id).first<{ id: string }>();
     if (!sender) throw new CampaignDispatchConflictError("Campaign sender is not ready");
     const contacts = await this.database.prepare(`${eligibleContactsSql("?1")} ORDER BY ct.created_at, ct.id LIMIT ?2`)
@@ -205,7 +205,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
           JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
           JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= CURRENT_TIMESTAMP AND c.status = 'queued'
-            AND c.channel = 'email' AND si.status = 'ready' AND si.provider = 'acs-email'
+            AND c.channel = 'email' AND si.status = 'ready'
             AND ${activeConsentSql("cj", "ct")}
             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.tenant_id = cj.tenant_id AND sp.channel = 'email' AND sp.address_normalized = LOWER(ct.email))
           ORDER BY cj.available_at, cj.created_at LIMIT 1)
@@ -221,7 +221,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
     }
     const row = await this.database.prepare(
       `SELECT cj.id, cj.tenant_id, cj.campaign_id, cj.contact_id, cj.idempotency_key,
-              si.sender_address, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token
+              si.sender_address, si.provider, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token
          FROM campaign_jobs cj JOIN campaigns c ON c.id = cj.campaign_id AND c.tenant_id = cj.tenant_id
          JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
          JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
@@ -259,7 +259,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
 }
 
 type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null };
-type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
+type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; provider: "acs-email" | "oci-email-delivery"; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
 type DeliveryStateRow = { tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string };
 
 function assertQueueable(campaign: DispatchCampaignRow | null): asserts campaign is DispatchCampaignRow {
@@ -302,7 +302,7 @@ function suppressIneligibleJobsSql(now: string, sqlite = false): string {
 function mapDeliveryJob(row: DeliveryJobRow, unsubscribeUrl: string): CampaignDeliveryJob {
   return {
     id: row.id, tenantId: row.tenant_id, campaignId: row.campaign_id, contactId: row.contact_id,
-    idempotencyKey: row.idempotency_key, from: row.sender_address, to: row.email,
+    idempotencyKey: row.idempotency_key, from: row.sender_address, provider: row.provider, to: row.email,
     subject: row.subject, bodyText: row.body_text, ...(row.body_html ? { bodyHtml: row.body_html } : {}), unsubscribeUrl,
   };
 }

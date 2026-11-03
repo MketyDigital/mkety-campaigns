@@ -4,6 +4,7 @@ export type TenantEmailDomain = {
   id: string;
   tenantId: string;
   domainName: string;
+  provider: "acs-email" | "oci-email-delivery";
   azureResourceId: string | null;
   provisioningState: string;
   verificationRecords: AzureDomainState["verificationRecords"];
@@ -12,8 +13,8 @@ export type TenantEmailDomain = {
   updatedAt: string;
 };
 
-export type NewTenantEmailDomain = Pick<TenantEmailDomain, "id" | "tenantId" | "domainName">;
-export type TenantDomainState = Omit<TenantEmailDomain, "id" | "tenantId" | "domainName" | "updatedAt">;
+export type NewTenantEmailDomain = Pick<TenantEmailDomain, "id" | "tenantId" | "domainName" | "provider">;
+export type TenantDomainState = Omit<TenantEmailDomain, "id" | "tenantId" | "domainName" | "provider" | "updatedAt">;
 
 export interface DomainRepository {
   list(tenantId: string): Promise<TenantEmailDomain[]>;
@@ -40,7 +41,7 @@ export class DomainConflictError extends Error {
 
 export class DomainProvisioningError extends Error {
   constructor() {
-    super("Azure could not provision this email domain");
+    super("The selected email provider could not provision this email domain");
     this.name = "DomainProvisioningError";
   }
 }
@@ -52,7 +53,11 @@ export class DomainRetryNotAvailableError extends Error {
   }
 }
 
-export function createTenantDomainService(repository: DomainRepository, provider: AzureCommunicationDomains): TenantDomainService {
+export function createTenantDomainService(
+  repository: DomainRepository,
+  provider: AzureCommunicationDomains,
+  providerName: TenantEmailDomain["provider"] = "acs-email",
+): TenantDomainService {
   return {
     list: (tenantId) => repository.list(tenantId),
     get: (tenantId, id) => repository.get(tenantId, id),
@@ -62,7 +67,7 @@ export function createTenantDomainService(repository: DomainRepository, provider
       const id = crypto.randomUUID();
       let saved: TenantEmailDomain;
       try {
-        saved = await repository.insertPending({ id, tenantId, domainName: normalized });
+        saved = await repository.insertPending({ id, tenantId, domainName: normalized, provider: providerName });
       } catch (error) {
         if (error instanceof DomainConflictError || isUniqueViolation(error)) throw new DomainConflictError();
         throw error;
@@ -88,6 +93,7 @@ export function createTenantDomainService(repository: DomainRepository, provider
     async retryCreate(tenantId, id) {
       const saved = await repository.get(tenantId, id);
       if (!saved) return null;
+      if (saved.provider !== providerName) throw new DomainProvisioningError();
       if (saved.provisioningState !== "Failed") throw new DomainRetryNotAvailableError();
 
       try {
@@ -110,6 +116,7 @@ export function createTenantDomainService(repository: DomainRepository, provider
     async refresh(tenantId, id) {
       const saved = await repository.get(tenantId, id);
       if (!saved) return null;
+      if (saved.provider !== providerName) throw new DomainProvisioningError();
 
       let state: AzureDomainState;
       try {
@@ -127,6 +134,7 @@ export function createTenantDomainService(repository: DomainRepository, provider
     async verify(tenantId, id, type) {
       const saved = await repository.get(tenantId, id);
       if (!saved) return null;
+      if (saved.provider !== providerName) throw new DomainProvisioningError();
       try {
         await provider.initiateVerification(saved.domainName, type);
       } catch {
