@@ -53,6 +53,16 @@ jobs:
           const matches = apps.filter(app => normalize(app.git_repository) === wanted && app.git_branch === branch);
           if (matches.length !== 1 || !matches[0].uuid) {
             console.error(`Expected one Coolify app for ${repository} on ${branch}; found ${matches.length}. No changes made.`);
+            const related = apps.filter(app =>
+              normalize(app.git_repository).includes('mkety-campaigns') || /campaign/i.test(app.name ?? '')
+            );
+            if (related.length) {
+              console.error('Related Coolify app metadata:', JSON.stringify(related.map(({ name, git_repository, git_branch }) => ({
+                name, git_repository, git_branch
+              }))));
+            } else {
+              console.error(`Coolify returned ${apps.length} applications; none have Campaigns in the app name or repository URL.`);
+            }
             process.exit(1);
           }
           process.stdout.write(matches[0].uuid);
