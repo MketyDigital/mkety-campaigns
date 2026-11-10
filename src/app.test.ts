@@ -471,3 +471,17 @@ function fakeSenderService(overrides: Partial<TenantSenderService> = {}): Tenant
     ...overrides,
   };
 }
+
+test("security headers prevent browser caching of authenticated and authentication pages", async () => {
+  const app = createApp();
+  for (const path of ["/login", "/app", "/api/tenant/me", "/api/auth/sign-in/email"]) {
+    const response = await app.request(path);
+    assert.equal(response.headers.get("cache-control"), "no-store", path);
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
+    assert.equal(response.headers.get("x-frame-options"), "DENY", path);
+    assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin", path);
+  }
+  const publicResponse = await app.request("/healthz");
+  assert.equal(publicResponse.headers.get("cache-control"), null);
+  assert.equal(publicResponse.headers.get("x-content-type-options"), "nosniff");
+});
