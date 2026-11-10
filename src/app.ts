@@ -52,6 +52,12 @@ export function createApp(
   app.use("*", async (c, next) => {
     c.set("databaseReady", checkDatabase);
     await next();
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+    c.header("X-Frame-Options", "DENY");
+    if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/app") || c.req.path === "/login") {
+      c.header("Cache-Control", "no-store");
+    }
   });
 
   app.get("/", (c) => c.html(`<!doctype html>
