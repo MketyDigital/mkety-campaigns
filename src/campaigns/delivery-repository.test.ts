@@ -121,7 +121,8 @@ test("authenticated delivery reconciliation suppresses bounced contacts idempote
     const attempt = await db.prepare("SELECT status FROM delivery_attempts WHERE provider_message_id = 'provider-message-1'").first<{ status: string }>();
     assert.equal(attempt?.status, "bounced");
     const block = await db.prepare("SELECT reason, address_normalized FROM suppressions WHERE tenant_id = 'tenant-1' AND channel = 'email'").first<{ reason: string; address_normalized: string }>();
-    assert.deepEqual(block, { reason: "bounced", address_normalized: "person1@example.com" });
+    assert.equal(block?.reason, "bounced");
+    assert.equal(block?.address_normalized, "person1@example.com");
     const count = await db.prepare("SELECT COUNT(*) AS count FROM email_delivery_events").first<{ count: number }>();
     assert.equal(count?.count, 1);
     assert.equal(await reconciler.reconcile({ ...event, eventId: "evt-late", outcome: "delivered", occurredAt: "2026-11-10T12:00:00Z" }), "recorded");
