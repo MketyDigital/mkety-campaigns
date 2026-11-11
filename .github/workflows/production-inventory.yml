@@ -21,17 +21,17 @@ jobs:
     env:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CF_TOKEN || secrets.MKETY_CLOUDFLARE_API_TOKEN }}
       ZITADEL_URL: ${{ secrets.ZITADEL_URL || vars.ZITADEL_URL }}
       ZITADEL_MANAGEMENT_PAT: ${{ secrets.ZITADEL_MANAGEMENT_PAT }}
       ZITADEL_PROJECT_ID: ${{ secrets.ZITADEL_PROJECT_ID }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL }}
-      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL || secrets.OCI_DATABASE_URL || secrets.POSTGRES_URL }}
+      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
       ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
       OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
       OCI_EMAIL_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || secrets.CF_R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || secrets.CF_R2_SECRET_ACCESS_KEY }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
     steps:
       - name: Report required secret availability
@@ -55,7 +55,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          case "$COOLIFY_URL" in https://*) ;; *) echo "Coolify URL is not HTTPS; inventory stopped."; exit 1 ;; esac
+          case "$COOLIFY_URL" in https://*) ;; http://*) echo "Coolify URL uses HTTP; inventory stopped without sending a token." >&2; exit 1 ;; *) COOLIFY_URL="https://${COOLIFY_URL#//}" ;; esac
           api="${COOLIFY_URL%/}/api/v1"
           headers=(--header "Authorization: Bearer $COOLIFY_API_TOKEN" --header "Accept: application/json")
           for resource in applications projects servers; do
