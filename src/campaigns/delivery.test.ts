@@ -75,3 +75,25 @@ function fakeRepository(overrides: Partial<CampaignDeliveryRepository> = {}) {
   };
   return Object.assign(repository, { accepted, uncertain });
 }
+
+test("worker never calls a provider without a usable unsubscribe URL", async () => {
+  for (const unsubscribeUrl of [undefined, "", "not-a-url", "http://campaign.mkety.com/unsubscribe?token=abc", "https://campaign.mkety.com/unsubscribe", "https://campaign.mkety.com/other?token=abc"]) {
+    let sendCalls = 0;
+    const repository = fakeRepository({ async claimNext() { return { ...job, unsubscribeUrl }; } });
+    const provider = fakeProvider({ async send() { sendCalls++; throw new Error("must not send"); } });
+    assert.equal(await createEmailCampaignWorker(repository, provider, true).processOne(), true);
+    assert.equal(sendCalls, 0, String(unsubscribeUrl));
+    assert.equal(repository.accepted.length, 0);
+    assert.equal(repository.uncertain.length, 1);
+    assert.match(repository.uncertain[0].error, /unsubscribe link/i);
+  }
+});
+
+test("worker accepts a localhost unsubscribe URL for development", async () => {
+  let sendCalls = 0;
+  const repository = fakeRepository({ async claimNext() { return { ...job, unsubscribeUrl: "http://localhost:3000/unsubscribe?token=test-token" }; } });
+  const provider = fakeProvider({ async send() { sendCalls++; return { provider: "acs-email", acceptedAt: new Date().toISOString() }; } });
+  await createEmailCampaignWorker(repository, provider, true).processOne();
+  assert.equal(sendCalls, 1);
+  assert.equal(repository.accepted.length, 1);
+});

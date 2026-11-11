@@ -44,6 +44,10 @@ export function createEmailCampaignWorker(
         await repository.markUncertain(job.id, "The selected sender provider is not configured.");
         return true;
       }
+      if (!hasValidUnsubscribeUrl(job.unsubscribeUrl)) {
+        await repository.markUncertain(job.id, "A valid HTTPS unsubscribe link is required before delivery.");
+        return true;
+      }
       try {
         const result = await provider.send({
           idempotencyKey: job.idempotencyKey,
@@ -68,4 +72,17 @@ export function createEmailCampaignWorker(
 
 function escapeAttribute(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function hasValidUnsubscribeUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost"))
+      && !url.username && !url.password
+      && url.pathname === "/unsubscribe"
+      && Boolean(url.searchParams.get("token"));
+  } catch {
+    return false;
+  }
 }
