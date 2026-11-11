@@ -12,8 +12,9 @@ export class CampaignDispatchConflictError extends Error {
 }
 
 export class PostgresCampaignDispatchRepository implements CampaignDispatchRepository {
-  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string) {
+  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000) {
     validateDispatchSettings(publicBaseUrl);
+    normalizeDailyRecipientLimit(dailyRecipientLimit);
   }
 
   async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number> {
@@ -34,6 +35,13 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       const contacts = await client.query<{ id: string }>(`${eligibleContactsSql("$1")} ORDER BY ct.created_at, ct.id LIMIT $2`, [campaign.tenant_id, limit + 1]);
       if (!contacts.rows.length) throw new CampaignDispatchConflictError("Campaign has no eligible email recipients");
       if (contacts.rows.length > limit) throw new CampaignDispatchConflictError("Campaign exceeds the configured recipient limit");
+      await client.query(
+        `INSERT INTO tenant_daily_email_reservations (tenant_id, day_utc, reserved_count, max_recipients)
+         VALUES ($1, (NOW() AT TIME ZONE 'UTC')::date, $2, $3)
+         ON CONFLICT (tenant_id, day_utc) DO UPDATE
+           SET reserved_count = tenant_daily_email_reservations.reserved_count + EXCLUDED.reserved_count,
+               max_recipients = LEAST(tenant_daily_email_reservations.max_recipients, EXCLUDED.max_recipients)`,
+        [campaign.tenant_id, contacts.rows.length, this.dailyRecipientLimit]);
       for (const contact of contacts.rows) {
         await client.query(
           `INSERT INTO campaign_jobs (id, tenant_id, campaign_id, contact_id, status, idempotency_key, available_at)
@@ -54,6 +62,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       return contacts.rows.length;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (isDailyBudgetViolation(error)) throw new CampaignDispatchConflictError("Tenant daily email recipient budget exceeded");
       throw error;
     } finally {
       client.release();
@@ -154,8 +163,9 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
 }
 
 export class D1CampaignDispatchRepository implements CampaignDispatchRepository {
-  constructor(private readonly database: D1Database, private readonly publicBaseUrl: string) {
+  constructor(private readonly database: D1Database, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000) {
     validateDispatchSettings(publicBaseUrl);
+    normalizeDailyRecipientLimit(dailyRecipientLimit);
   }
 
   async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number> {
@@ -173,7 +183,14 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
     const rows = contacts.results ?? [];
     if (!rows.length) throw new CampaignDispatchConflictError("Campaign has no eligible email recipients");
     if (rows.length > limit) throw new CampaignDispatchConflictError("Campaign exceeds the configured recipient limit");
-    const statements = rows.flatMap((contact) => [
+    const reservation = this.database.prepare(
+      `INSERT INTO tenant_daily_email_reservations (tenant_id, day_utc, reserved_count, max_recipients)
+       VALUES (?1, date('now'), ?2, ?3)
+       ON CONFLICT(tenant_id, day_utc) DO UPDATE
+         SET reserved_count = tenant_daily_email_reservations.reserved_count + excluded.reserved_count,
+             max_recipients = MIN(tenant_daily_email_reservations.max_recipients, excluded.max_recipients)`,
+    ).bind(campaign.tenant_id, rows.length, this.dailyRecipientLimit);
+    const statements = [reservation, ...rows.flatMap((contact) => [
       this.database.prepare(
         `INSERT INTO campaign_jobs (id, tenant_id, campaign_id, contact_id, status, idempotency_key, available_at)
          VALUES (?1, ?2, ?3, ?4, 'queued', ?5, COALESCE(?6, CURRENT_TIMESTAMP)) ON CONFLICT(idempotency_key) DO NOTHING`,
@@ -182,13 +199,18 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
         `INSERT INTO unsubscribe_tokens (token, tenant_id, campaign_id, contact_id) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(campaign_id, contact_id) DO NOTHING`,
       ).bind(createOpaqueUnsubscribeToken(), campaign.tenant_id, campaign.id, contact.id),
-    ]);
+    ])];
     statements.push(this.database.prepare("UPDATE campaigns SET status = 'queued', updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'approved'").bind(campaign.id));
     statements.push(this.database.prepare(
       `INSERT INTO audit_log (id, tenant_id, actor_user_id, action, target_type, target_id, metadata_json)
        VALUES (?1, ?2, ?3, 'campaign_queued', 'campaign', ?4, ?5)`,
     ).bind(crypto.randomUUID(), campaign.tenant_id, actorUserId, campaign.id, JSON.stringify({ recipients: rows.length })));
-    await this.database.batch(statements);
+    try {
+      await this.database.batch(statements);
+    } catch (error) {
+      if (isDailyBudgetViolation(error)) throw new CampaignDispatchConflictError("Tenant daily email recipient budget exceeded");
+      throw error;
+    }
     return rows.length;
   }
 
@@ -266,6 +288,20 @@ function assertQueueable(campaign: DispatchCampaignRow | null): asserts campaign
   if (!campaign || campaign.status !== "approved") throw new CampaignDispatchConflictError("Campaign is not approved for dispatch");
   if (campaign.channel !== "email") throw new CampaignDispatchConflictError("SMS campaign dispatch is disabled");
   if (!campaign.sender_identity_id) throw new CampaignDispatchConflictError("Campaign sender is not selected");
+}
+
+function normalizeDailyRecipientLimit(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 100000) {
+    throw new CampaignDispatchConflictError("Tenant daily email recipient budget must be 1 to 100000");
+  }
+  return value;
+}
+
+function isDailyBudgetViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const failure = error as { code?: unknown; constraint?: unknown; message?: unknown };
+  return failure.constraint === "daily_recipient_budget_enforced"
+    || (typeof failure.message === "string" && failure.message.includes("daily_recipient_budget_enforced"));
 }
 
 function normalizeRecipientLimit(value: number): number {
