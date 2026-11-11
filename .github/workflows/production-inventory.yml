@@ -90,8 +90,8 @@ jobs:
           const fs=require('fs'),data=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           if(!data.success) throw new Error('Cloudflare zone lookup was not successful');
           const zones=(data.result||[]).filter(z=>z.name==='mkety.com');
-          if(zones.length!==1){console.log('Cloudflare zone candidates for mkety.com:',zones.length);process.exit(0)}
-          console.log(zones[0].id);
+          if(zones.length!==1){console.error('Cloudflare zone candidates for mkety.com:',zones.length);process.exit(0)}
+          process.stdout.write(zones[0].id);
           NODE
           zone_id="$(tr -d '\r\n' < "$RUNNER_TEMP/cf-zone-id")"
           if [ -z "$zone_id" ]; then echo "Cloudflare mkety.com zone is not uniquely available."; exit 0; fi
@@ -124,7 +124,6 @@ jobs:
           const data=await response.json();
           const matches=(data.applications||[]).filter(a=>a.projectId===process.env.ZITADEL_PROJECT_ID && a.name==='Mkety Campaigns Ops Production');
           console.log('MKETY Auth issuer verified; project applications visible:',(data.applications||[]).filter(a=>a.projectId===process.env.ZITADEL_PROJECT_ID).length,'; Campaigns Ops app matches:',matches.length);
-          fs=require('fs');
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'\n## MKETY Auth inventory\n\n- OIDC issuer: reachable and verified\n- Campaigns Ops app matches: '+matches.length+'\n');
           NODE
 
