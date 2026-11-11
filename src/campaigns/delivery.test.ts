@@ -59,6 +59,16 @@ test("campaign worker marks an OCI sender uncertain when OCI credentials are abs
   assert.match(repository.uncertain[0]?.error ?? "", /provider is not configured/i);
 });
 
+test("campaign worker does not claim jobs while the global emergency stop is active", async () => {
+  let claimed = false;
+  const repository = fakeRepository({
+    async isEmergencyStopActive() { return true; },
+    async claimNext() { claimed = true; return job; },
+  });
+  assert.equal(await createEmailCampaignWorker(repository, fakeProvider(), true).processOne(), false);
+  assert.equal(claimed, false);
+});
+
 function fakeProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
   return { name: "acs-email", async send() { return { provider: "acs-email", acceptedAt: "2026-11-03T12:00:00.000Z" }; }, ...overrides };
 }

@@ -5,6 +5,9 @@ import { buildUnsubscribeUrl, createOpaqueUnsubscribeToken } from "../email/unsu
 
 export interface CampaignDispatchRepository extends CampaignDeliveryRepository {
   queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number>;
+  getOpsControlStatus?(): Promise<{ emailEmergencyStop: boolean }>;
+  setEmergencyStop?(paused: boolean, actorUserId: string): Promise<void>;
+  isEmergencyStopActive?(): Promise<boolean>;
 }
 
 export class CampaignDispatchConflictError extends Error {
@@ -12,9 +15,42 @@ export class CampaignDispatchConflictError extends Error {
 }
 
 export class PostgresCampaignDispatchRepository implements CampaignDispatchRepository {
-  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000) {
+  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000, private readonly providerMinIntervalMs = 1000) {
     validateDispatchSettings(publicBaseUrl);
     normalizeDailyRecipientLimit(dailyRecipientLimit);
+    if (!Number.isInteger(providerMinIntervalMs) || providerMinIntervalMs < 250 || providerMinIntervalMs > 60_000) throw new Error("EMAIL_PROVIDER_MIN_INTERVAL_MS must be between 250 and 60000");
+  }
+
+  async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean }> {
+    const result = await this.database.query<{ email_emergency_stop: boolean }>(
+      "SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE",
+    );
+    return { emailEmergencyStop: result.rows[0]?.email_emergency_stop !== false };
+  }
+
+  async isEmergencyStopActive(): Promise<boolean> {
+    return (await this.getOpsControlStatus()).emailEmergencyStop;
+  }
+
+  async setEmergencyStop(paused: boolean, actorUserId: string): Promise<void> {
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "INSERT INTO campaign_ops_controls (id,email_emergency_stop,updated_at,updated_by) VALUES (TRUE,$1,NOW(),$2) ON CONFLICT (id) DO UPDATE SET email_emergency_stop=EXCLUDED.email_emergency_stop,updated_at=NOW(),updated_by=EXCLUDED.updated_by",
+        [paused, actorUserId],
+      );
+      await client.query(
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,$2,$3)",
+        [actorUserId, paused ? "email_emergency_stop_enabled" : "email_emergency_stop_disabled", JSON.stringify({ paused })],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number> {
@@ -73,6 +109,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
+      const emergencyStop = await client.query<{ email_emergency_stop: boolean }>("SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE FOR SHARE");
+      if (emergencyStop.rows[0]?.email_emergency_stop !== false) { await client.query("COMMIT"); return null; }
       await client.query(
         `UPDATE campaign_jobs SET status = 'uncertain', locked_at = NULL,
              last_error = 'Worker lease expired; reconcile before retrying.'
@@ -88,6 +126,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
             AND c.channel = 'email' AND si.status = 'ready'
+            AND NOT EXISTS (SELECT 1 FROM campaign_provider_throttle_slots ts WHERE ts.provider=si.provider AND ts.next_allowed_at>NOW())
             AND ${activeConsentSql("cj", "ct")}
             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.tenant_id = cj.tenant_id AND sp.channel = 'email' AND sp.address_normalized = LOWER(ct.email))
           ORDER BY cj.available_at, cj.created_at
@@ -98,6 +137,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
         await client.query("COMMIT");
         return null;
       }
+      const throttle = await client.query("INSERT INTO campaign_provider_throttle_slots (provider,next_allowed_at) VALUES ($1,NOW() + ($2::int * INTERVAL '1 millisecond')) ON CONFLICT (provider) DO UPDATE SET next_allowed_at=NOW() + ($2::int * INTERVAL '1 millisecond') WHERE campaign_provider_throttle_slots.next_allowed_at <= NOW() RETURNING provider", [row.provider, this.providerMinIntervalMs]);
+      if (!throttle.rows.length) { await client.query("COMMIT"); return null; }
       await client.query("UPDATE campaign_jobs SET status = 'sending', locked_at = NOW(), attempts = attempts + 1 WHERE id = $1", [row.id]);
       await client.query("COMMIT");
       return mapDeliveryJob(row, buildUnsubscribeUrl(this.publicBaseUrl, row.unsubscribe_token).href);

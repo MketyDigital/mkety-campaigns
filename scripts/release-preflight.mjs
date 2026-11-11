@@ -32,6 +32,21 @@ export function checkReleaseEnvironment(env) {
   } catch {
     errors.push("BETTER_AUTH_URL must be a valid HTTPS URL");
   }
+  const oidcIssuer = env.MKETY_OPS_AUTH_ISSUER || "";
+  const oidcClientId = env.MKETY_OPS_AUTH_CLIENT_ID || "";
+  const oidcEmail = env.MKETY_OPS_ALLOWED_EMAIL || "";
+  const oidcCallback = env.MKETY_OPS_AUTH_CALLBACK_URL || "";
+  try {
+    const issuer = new URL(oidcIssuer);
+    if (issuer.protocol !== "https:" || issuer.username || issuer.password || issuer.search || issuer.hash) errors.push("MKETY_OPS_AUTH_ISSUER must be a clean HTTPS issuer URL");
+  } catch { errors.push("MKETY_OPS_AUTH_ISSUER must be a valid HTTPS URL"); }
+  if (!oidcClientId.trim()) errors.push("MKETY_OPS_AUTH_CLIENT_ID is required");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(oidcEmail.trim())) errors.push("MKETY_OPS_ALLOWED_EMAIL must be a single operator email");
+  try {
+    const callback = new URL(oidcCallback);
+    const expected = env.RELEASE_EXPECTED_ORIGIN || "https://campaign.mkety.com";
+    if (callback.origin !== expected || callback.pathname !== "/api/ops/auth/callback" || callback.search || callback.hash) errors.push("MKETY_OPS_AUTH_CALLBACK_URL must match the Campaigns OIDC callback");
+  } catch { errors.push("MKETY_OPS_AUTH_CALLBACK_URL must be a valid HTTPS URL"); }
   const secret = env.BETTER_AUTH_SECRET;
   if (!secret || secret.length < 32 || /^(.)\1+$/.test(secret) || /^(change-me|placeholder|example)/i.test(secret)) {
     errors.push("BETTER_AUTH_SECRET must be a non-placeholder value of at least 32 characters");

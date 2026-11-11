@@ -21,6 +21,7 @@ export interface CampaignDeliveryRepository {
   markAccepted(id: string, result: EmailSendResult): Promise<void>;
   /** Provider timeouts and local persistence failures are ambiguous; they must not be auto-retried. */
   markUncertain(id: string, reason: string): Promise<void>;
+  isEmergencyStopActive?(): Promise<boolean>;
 }
 
 export interface EmailCampaignWorker {
@@ -37,6 +38,7 @@ export function createEmailCampaignWorker(
   return {
     async processOne() {
       if (!enabled) return false;
+      if (repository.isEmergencyStopActive && await repository.isEmergencyStopActive()) return false;
       const job = await repository.claimNext();
       if (!job) return false;
       const provider = Array.isArray(providers) ? providers.find((candidate) => candidate.name === job.provider) : providers.name === job.provider ? providers : undefined;

@@ -1,0 +1,142 @@
+name: Campaigns production inventory
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/production-inventory.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mkety-campaigns-production-inventory
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
+      COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
+      ZITADEL_URL: ${{ secrets.ZITADEL_URL || vars.ZITADEL_URL }}
+      ZITADEL_MANAGEMENT_PAT: ${{ secrets.ZITADEL_MANAGEMENT_PAT }}
+      ZITADEL_PROJECT_ID: ${{ secrets.ZITADEL_PROJECT_ID }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL }}
+      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+      ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
+      OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
+      OCI_EMAIL_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+    steps:
+      - name: Report required secret availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const vars = [
+            'COOLIFY_API_TOKEN','CLOUDFLARE_API_TOKEN','ZITADEL_URL','ZITADEL_MANAGEMENT_PAT',
+            'ZITADEL_PROJECT_ID','DATABASE_URL','BETTER_AUTH_SECRET',
+            'ACS_EMAIL_CONNECTION_STRING','OCI_EMAIL_PRIVATE_KEY','OCI_EMAIL_TENANCY_OCID',
+            'R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','AZURE_STORAGE_CONNECTION_STRING'
+          ];
+          for (const key of vars) console.log(key + ': ' + (process.env[key] ? 'present' : 'missing'));
+          const out = process.env.GITHUB_STEP_SUMMARY;
+          require('fs').appendFileSync(out, '## Campaigns credential inventory\n\n' + vars.map(key => '- ' + key + ': ' + (process.env[key] ? 'present' : 'missing')).join('\n') + '\n');
+          NODE
+
+      - name: Inspect Coolify without changing resources
+        if: env.COOLIFY_API_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$COOLIFY_URL" in https://*) ;; *) echo "Coolify URL is not HTTPS; inventory stopped."; exit 1 ;; esac
+          api="${COOLIFY_URL%/}/api/v1"
+          headers=(--header "Authorization: Bearer $COOLIFY_API_TOKEN" --header "Accept: application/json")
+          for resource in applications projects servers; do
+            if ! curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/$resource" > "$RUNNER_TEMP/coolify-$resource.json"; then
+              echo "Coolify $resource inventory failed (no changes made)."
+              exit 1
+            fi
+          done
+          node - "$RUNNER_TEMP" <<'NODE'
+          const fs=require('fs'), path=require('path'), dir=process.argv[2];
+          const read=name=>JSON.parse(fs.readFileSync(path.join(dir,'coolify-'+name+'.json'),'utf8'));
+          const apps=read('applications'), projects=read('projects'), servers=read('servers');
+          const related=apps.filter(a=>String(a.git_repository||'').toLowerCase().includes('mkety-campaigns')||/campaign/i.test(a.name||''));
+          console.log('Coolify applications:',apps.length,'; Campaigns candidates:',related.length);
+          for(const a of related) console.log(JSON.stringify({name:a.name,repository:a.git_repository,branch:a.git_branch,uuid:a.uuid,domains:a.domains||a.fqdn}));
+          console.log('Coolify projects:',projects.length);
+          for(const p of projects) console.log(JSON.stringify({name:p.name,uuid:p.uuid, environments:(p.environments||[]).map(e=>({name:e.name,uuid:e.uuid}))}));
+          console.log('Coolify servers:',servers.length);
+          for(const s of servers) console.log(JSON.stringify({name:s.name,uuid:s.uuid,ip:s.ip,status:s.settings?.is_reachable===false?'unreachable':'reported'}));
+          const sum=process.env.GITHUB_STEP_SUMMARY;
+          fs.appendFileSync(sum,'\n## Coolify inventory\n\n- Applications: '+apps.length+'\n- Campaigns candidates: '+related.length+'\n- Projects: '+projects.length+'\n- Servers: '+servers.length+'\n');
+          NODE
+
+      - name: Inspect Cloudflare zone and campaign DNS without changing records
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          headers=(--header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" --header "Accept: application/json")
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "https://api.cloudflare.com/client/v4/zones?name=mkety.com" > "$RUNNER_TEMP/cf-zones.json"
+          node - "$RUNNER_TEMP/cf-zones.json" > "$RUNNER_TEMP/cf-zone-id" <<'NODE'
+          const fs=require('fs'),data=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(!data.success) throw new Error('Cloudflare zone lookup was not successful');
+          const zones=(data.result||[]).filter(z=>z.name==='mkety.com');
+          if(zones.length!==1){console.error('Cloudflare zone candidates for mkety.com:',zones.length);process.exit(0)}
+          process.stdout.write(zones[0].id);
+          NODE
+          zone_id="$(tr -d '\r\n' < "$RUNNER_TEMP/cf-zone-id")"
+          if [ -z "$zone_id" ]; then echo "Cloudflare mkety.com zone is not uniquely available."; exit 0; fi
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?name=campaign.mkety.com" > "$RUNNER_TEMP/cf-records.json"
+          node - "$RUNNER_TEMP/cf-records.json" <<'NODE'
+          const fs=require('fs'),data=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(!data.success) throw new Error('Cloudflare DNS lookup was not successful');
+          console.log('Cloudflare campaign.mkety.com records:',(data.result||[]).map(r=>({type:r.type,name:r.name,content:r.content,proxied:r.proxied})));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'\n## Cloudflare DNS inventory\n\n- campaign.mkety.com records: '+(data.result||[]).length+'\n');
+          NODE
+
+      - name: Check MKETY Auth issuer and application inventory access
+        if: env.ZITADEL_URL != '' && env.ZITADEL_MANAGEMENT_PAT != '' && env.ZITADEL_PROJECT_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZITADEL_URL="$ZITADEL_URL" ZITADEL_MANAGEMENT_PAT="$ZITADEL_MANAGEMENT_PAT" ZITADEL_PROJECT_ID="$ZITADEL_PROJECT_ID" node --input-type=module - <<'NODE'
+          const issuer=process.env.ZITADEL_URL.replace(/\/+$/,'');
+          const token=process.env.ZITADEL_MANAGEMENT_PAT;
+          const discovery=await fetch(issuer+'/.well-known/openid-configuration',{redirect:'error'});
+          if(!discovery.ok) throw new Error('MKETY Auth discovery endpoint did not respond successfully');
+          const config=await discovery.json();
+          if(config.issuer.replace(/\/+$/,'')!==issuer) throw new Error('MKETY Auth discovery issuer does not match configuration');
+          const response=await fetch(issuer+'/zitadel.application.v2.ApplicationService/ListApplications',{
+            method:'POST',
+            headers:{authorization:'Bearer '+token,'connect-protocol-version':'1','content-type':'application/json'},
+            body:JSON.stringify({})
+          });
+          if(!response.ok) throw new Error('MKETY Auth application inventory failed with HTTP '+response.status);
+          const data=await response.json();
+          const matches=(data.applications||[]).filter(a=>a.projectId===process.env.ZITADEL_PROJECT_ID && a.name==='Mkety Campaigns Ops Production');
+          console.log('MKETY Auth issuer verified; project applications visible:',(data.applications||[]).filter(a=>a.projectId===process.env.ZITADEL_PROJECT_ID).length,'; Campaigns Ops app matches:',matches.length);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'\n## MKETY Auth inventory\n\n- OIDC issuer: reachable and verified\n- Campaigns Ops app matches: '+matches.length+'\n');
+          NODE
+
+      - name: Verify database URL names the dedicated Campaigns database
+        if: env.DATABASE_URL != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const url=new URL(process.env.DATABASE_URL);
+          if(!['postgres:','postgresql:'].includes(url.protocol)||decodeURIComponent(url.pathname)!='/mkety_campaigns'){
+            console.error('DATABASE_URL does not target the dedicated mkety_campaigns PostgreSQL database. No database connection or migration was attempted.');
+            process.exit(1);
+          }
+          console.log('Database URL shape matches the dedicated Campaigns database; credentials and database ownership were not tested.');
+          NODE

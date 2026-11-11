@@ -10,6 +10,7 @@ import { PostgresCampaignWorkspace } from "./campaigns/repository.js";
 import { PostgresCampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import { createEmailCampaignWorker } from "./campaigns/delivery.js";
 import { PostgresOperationsService } from "./ops/service.js";
+import { createOperatorAuth } from "./ops/operator-auth.js";
 import { createOptionalEmailProviders, createSelectedEmailProvider } from "./email/providers.js";
 import { createEmailTestSender } from "./email/test-send.js";
 
@@ -37,8 +38,9 @@ const workspace = pool ? new PostgresCampaignWorkspace(pool) : undefined;
 const campaignDispatchEnabled = process.env.EMAIL_CAMPAIGN_SEND_ENABLED === "true";
 const campaignRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_MAX_RECIPIENTS ?? 100);
 const dailyRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT ?? 1000);
-const campaignDispatch = campaignDispatchEnabled && pool && process.env.BETTER_AUTH_URL
-  ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL, dailyRecipientLimit)
+const providerMinIntervalMs = Number(process.env.EMAIL_PROVIDER_MIN_INTERVAL_MS ?? 1000);
+const campaignDispatch = pool && process.env.BETTER_AUTH_URL
+  ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL, dailyRecipientLimit, providerMinIntervalMs)
   : undefined;
 if (campaignDispatchEnabled && (!pool || !process.env.BETTER_AUTH_URL || !emailProvider)) {
   throw new Error("Campaign sending requires DATABASE_URL, BETTER_AUTH_URL, and a configured EMAIL_PROVIDER");
@@ -49,6 +51,7 @@ const campaignWorker = campaignDispatchEnabled && campaignDispatch && emailProvi
 const operations = pool && process.env.BETTER_AUTH_URL
   ? new PostgresOperationsService(pool, process.env.BETTER_AUTH_URL)
   : undefined;
+const operatorAuth = pool ? createOperatorAuth(pool, process.env) : undefined;
 const app = createApp(async () => {
   if (!pool) return false;
   try {
@@ -77,6 +80,7 @@ const app = createApp(async () => {
     );
     return result.rows[0]?.tenant_id ?? null;
   },
+  operatorAuth,
   resolveOpsAdmin: async (userId, sessionCreatedAt) => {
     const result = await pool.query<{ allowed: boolean }>(
       `SELECT TRUE AS allowed FROM users
