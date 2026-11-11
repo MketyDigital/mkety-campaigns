@@ -200,8 +200,18 @@ test("contacts and campaign pages are linked from the workspace", async () => {
   assert.match(await (await createApp().request("/app/contacts")).text(), /Withdraw email consent/);
   assert.match(await (await createApp().request("/app/campaigns")).text(), /Create a campaign draft/);
   assert.match(await (await createApp().request("/app/campaigns")).text(), /Submit for review/);
-  assert.match(await (await createApp().request("/app/ops")).text(), /Campaigns awaiting review/);
-  assert.match(await (await createApp().request("/app/ops")).text(), /Approved email campaigns/);
+  const operatorSecurity = {
+    ...activeSession,
+    operatorAuth: {
+      start: async () => new Response(null, { status: 302 }),
+      callback: async () => new Response(null, { status: 302 }),
+      session: async () => ({ id: "ops-1", email: "ops@example.com" }),
+      logout: async () => new Response(null, { status: 302 }),
+    },
+  };
+  const opsHtml = await (await createApp(async () => true, operatorSecurity).request("/app/ops")).text();
+  assert.match(opsHtml, /Campaigns awaiting review/);
+  assert.match(opsHtml, /Approved email campaigns/);
 });
 
 test("sign-in and required authenticator setup pages are available", async () => {
