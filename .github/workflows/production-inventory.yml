@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZITADEL_URL="$ZITADEL_URL" ZITADEL_MANAGEMENT_PAT="$ZITADEL_MANAGEMENT_PAT" ZITADEL_PROJECT_ID="$ZITADEL_PROJECT_ID" node - <<'NODE'
+          ZITADEL_URL="$ZITADEL_URL" ZITADEL_MANAGEMENT_PAT="$ZITADEL_MANAGEMENT_PAT" ZITADEL_PROJECT_ID="$ZITADEL_PROJECT_ID" node --input-type=module - <<'NODE'
           const issuer=process.env.ZITADEL_URL.replace(/\/+$/,'');
           const token=process.env.ZITADEL_MANAGEMENT_PAT;
           const discovery=await fetch(issuer+'/.well-known/openid-configuration',{redirect:'error'});
