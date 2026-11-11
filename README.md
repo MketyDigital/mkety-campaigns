@@ -1,6 +1,8 @@
 # MKETY Campaigns — Standalone Architecture & Roadmap
 
-Status: CUSTOMER PORTAL FOUNDATION + GATED ACS/OCI EMAIL CAMPAIGN DELIVERY. Owner: MKETY Ops. Updated: 2026-11-03.
+Status: CUSTOMER PORTAL FOUNDATION + GATED ACS/OCI EMAIL CAMPAIGN DELIVERY (CODE; NOT PRODUCTION-VERIFIED). Owner: MKETY Ops. Implementation status audited: 2026-11-11.
+
+**Current progress, open PR dependencies, remaining roadmap, and release gates:** [Development status and pilot readiness](docs/operations/development-status.md). The design/implementation documents under `docs/superpowers` are historical plans, not an automatically updated completion checklist.
 
 ## Current build
 - One TypeScript/Hono application with shared routes and separate Node and Cloudflare Workers entry points.
@@ -13,7 +15,7 @@ Status: CUSTOMER PORTAL FOUNDATION + GATED ACS/OCI EMAIL CAMPAIGN DELIVERY. Owne
 - ACS Email and OCI Email Delivery adapters are available as platform-managed providers. Portal domain setup provisions and checks domains and senders through the provider selected by `EMAIL_PROVIDER`; sender records persist their provider and the campaign worker routes each job to that adapter. ACS uses Azure Resource Manager. OCI creates Email Delivery domains and DKIM records, displays required SPF/DKIM DNS records, checks verification, and creates approved senders using the OCI signing key.
 - The portal includes customer invitations, Azure sender-domain setup, consent-evidenced manual/CSV contact imports, channel-specific consent withdrawal and suppression, campaign drafts with optional planned send times, tenant review submission, and MFA-protected Ops approval. Approval never sends.
 - Email delivery has a durable per-recipient queue for approved email campaigns, an explicit MFA Ops queue action, last-moment consent/suppression checks, opaque unsubscribe tokens and one-click unsubscribe, a recipient cap, stable idempotency keys, and manual review for uncertain provider results. The Coolify Node worker processes one job at a time. Campaign sending remains off unless `EMAIL_CAMPAIGN_SEND_ENABLED=true`.
-- `EMAIL_PROVIDER` selects the provider used for new domain and sender onboarding and for the fixed owner test-send. Existing senders retain their provider; campaign workers can route to every fully configured provider. Templates, bounce/complaint reconciliation, usage budgets, segments, and automated backup/restore jobs remain future work.
+- `EMAIL_PROVIDER` selects the provider used for new domain and sender onboarding and for the fixed owner test-send. Existing senders retain their provider; campaign workers can route to every fully configured provider. Templates, segments, provider-authenticated bounce/complaint ingestion, provider rate limits, verified automated backup/restore jobs and full usage/cost budgets remain future work. Provider-neutral event contracts, reconciler tests and a daily queue budget exist in **unmerged draft PRs**; see the status report for their dependencies.
 
 ### Run locally
 1. Copy `.env.example` to `.env` and set `DATABASE_URL` to a dedicated development PostgreSQL database.
@@ -68,7 +70,7 @@ Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveD
 
 ## Phases / acceptance gates
 0. Verify Azure sponsorship, ACS resource linkage, email domain support, SMS country/number eligibility, provider quotas, subscription limitations, and independent hosting plan. No customer uploads.
-1. Complete standalone foundation, CI/test environment, authentication/MFA, tenant-bound authorization, and no integrations to existing MKETY production. The app shell, migrations, invite-only auth, TOTP gate, and provider interfaces are in place; database-level RLS, full admin onboarding, and customer-data endpoints are not.
+1. Complete standalone foundation, CI/test environment, authentication/MFA, tenant-bound authorization, and no integrations to existing MKETY production. The app shell, migrations, invite-only auth, TOTP gate, provider interfaces, basic Ops onboarding and tenant-scoped contacts/campaign endpoints are in place. Database-level RLS and production onboarding/security evidence remain unfinished.
 2. ACS and OCI domain/sender onboarding, the consent-aware email queue, and provider-routed worker are implemented behind `EMAIL_CAMPAIGN_SEND_ENABLED=false`. Run a one-recipient test with an opted-in test contact; provider event reconciliation remains future work.
 3. Build domain onboarding, consent-aware CSV imports, suppression, templates, campaigns, operator review, scheduling, quotas and audit logs.
 4. Build provider-neutral SMS onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates. ACS SMS is not part of the initial provider lineup.
