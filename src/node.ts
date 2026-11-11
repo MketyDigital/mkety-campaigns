@@ -38,8 +38,9 @@ const workspace = pool ? new PostgresCampaignWorkspace(pool) : undefined;
 const campaignDispatchEnabled = process.env.EMAIL_CAMPAIGN_SEND_ENABLED === "true";
 const campaignRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_MAX_RECIPIENTS ?? 100);
 const dailyRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT ?? 1000);
+const providerMinIntervalMs = Number(process.env.EMAIL_PROVIDER_MIN_INTERVAL_MS ?? 1000);
 const campaignDispatch = pool && process.env.BETTER_AUTH_URL
-  ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL, dailyRecipientLimit)
+  ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL, dailyRecipientLimit, providerMinIntervalMs)
   : undefined;
 if (campaignDispatchEnabled && (!pool || !process.env.BETTER_AUTH_URL || !emailProvider)) {
   throw new Error("Campaign sending requires DATABASE_URL, BETTER_AUTH_URL, and a configured EMAIL_PROVIDER");
