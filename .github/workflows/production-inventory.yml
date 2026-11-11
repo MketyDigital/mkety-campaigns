@@ -273,7 +273,12 @@ jobs:
           if(!app){console.log('MKETY Auth Coolify app: not found');process.exit(0)}
           const envSource=JSON.parse(fs.readFileSync(path.join(dir,'coolify-envs-'+app.uuid+'.json'),'utf8'));
           const envs=Array.isArray(envSource)?envSource:(envSource.data||envSource.envs||[]);
-          const get=k=>envs.filter(e=>e.key===k).map(e=>e.real_value||e.value||'').find(v=>typeof v==='string'&&v.length>0)||'';
+          const unquote=value=>{
+            let text=String(value||'').trim();
+            if((text.startsWith("'")&&text.endsWith("'"))||(text.startsWith('"')&&text.endsWith('"')))text=text.slice(1,-1).trim();
+            return text;
+          };
+          const get=k=>unquote(envs.filter(e=>e.key===k).map(e=>e.real_value||e.value||'').find(v=>typeof v==='string'&&v.length>0)||'');
           const trim=value=>{while(value.endsWith('/'))value=value.slice(0,-1);return value};
           const normalize=raw=>{
             if(!raw)return null;
