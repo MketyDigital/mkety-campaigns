@@ -5,6 +5,7 @@ import { parseContactsCsv, validateCampaignDraft, validateContactImport, type Ca
 import type { CampaignWorkspace } from "./campaigns/workspace.js";
 import { CampaignDispatchConflictError, type CampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import type { OperationsService } from "./ops/service.js";
+import type { OperatorAuth } from "./ops/operator-auth.js";
 import { SenderDomainNotReadyError, SenderInputError, SenderProvisioningError, type TenantSenderService } from "./domains/senders.js";
 import { TestSenderUnavailableError, type EmailTestSender } from "./email/test-send.js";
 
@@ -33,6 +34,7 @@ export type AppSecurity = {
   };
   resolveTenantSeat(userId: string, sessionCreatedAt: Date): Promise<string | null>;
   resolveOpsAdmin?(userId: string, sessionCreatedAt: Date): Promise<boolean>;
+  operatorAuth?: OperatorAuth;
 };
 
 export function createApp(
@@ -151,7 +153,13 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
 
   app.get("/login", (c) => c.html(loginPageHtml));
   app.get("/app/setup-mfa", (c) => c.html(mfaSetupPageHtml));
-  app.get("/app/ops", (c) => c.html(operationsPageHtml));
+  app.get("/ops-login", (c) => c.html(opsLoginPageHtml));
+  app.get("/app/ops", async (c) => {
+    if (!security?.operatorAuth) return c.redirect("/ops-login?error=not_configured", 302);
+    const operator = await security.operatorAuth.session(c.req.raw.headers);
+    if (!operator) return c.redirect("/ops-login", 302);
+    return c.html(operationsPageHtml);
+  });
   app.get("/invite/accept", (c) => c.html(inviteAcceptPageHtml));
   app.get("/app/senders", (c) => c.html(senderIdentitiesPageHtml));
 
@@ -333,8 +341,16 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
   });
 
   app.use("/api/ops/*", async (c, next) => {
+    if (c.req.path.startsWith("/api/ops/auth/")) return next();
     if (!security) return c.json({ error: "auth_not_configured" }, 503);
     if (!isTrustedMutationOrigin(c.req.raw, security.trustedOrigins)) return c.json({ error: "untrusted_origin" }, 403);
+    if (security.operatorAuth) {
+      const operator = await security.operatorAuth.session(c.req.raw.headers);
+      if (!operator) return c.json({ error: "unauthorized" }, 401);
+      c.set("opsUserId", operator.id);
+      await next();
+      return;
+    }
     const session = await security.auth.getSession(c.req.raw.headers);
     if (!session) return c.json({ error: "unauthorized" }, 401);
     if (!session.user.twoFactorEnabled || session.user.role !== "ops") return c.json({ error: "forbidden" }, 403);
@@ -345,6 +361,29 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
     c.set("opsUserId", session.user.id);
     await next();
   });
+
+  app.get("/api/ops/auth/login", async (c) => {
+    if (!security?.operatorAuth) return c.text("MKETY Ops authentication is not configured.", 503);
+    try { return await security.operatorAuth.start(c.req.raw); }
+    catch { return c.text("MKETY Ops login is temporarily unavailable.", 503); }
+  });
+  app.get("/api/ops/auth/callback", async (c) => {
+    if (!security?.operatorAuth) return c.text("MKETY Ops authentication is not configured.", 503);
+    return security.operatorAuth.callback(c.req.raw);
+  });
+  app.post("/api/ops/auth/logout", async (c) => {
+    if (!security?.operatorAuth) return c.text("MKETY Ops authentication is not configured.", 503);
+    if (!isTrustedMutationOrigin(c.req.raw, security.trustedOrigins)) return c.json({ error: "untrusted_origin" }, 403);
+    return security.operatorAuth.logout(c.req.raw.headers);
+  });
+  app.get("/api/ops/system/status", async (c) => c.json({
+    service: "mkety-campaigns",
+    observedAt: new Date().toISOString(),
+    database: { ready: await c.get("databaseReady")() },
+    authentication: { operatorSession: "active", identityProvider: "MKETY OIDC" },
+    email: { sendingEnabled: campaignDispatchEnabled, dispatchConfigured: Boolean(campaignDispatch), recipientLimit: campaignRecipientLimit, testSendConfigured: Boolean(emailTestSender) },
+    components: { campaignWorkspace: Boolean(workspace), domainManagement: Boolean(domains), senderManagement: Boolean(senders) },
+  }));
 
   app.get("/api/tenant/me", (c) => {
     const scope = c.get("tenantContext");
@@ -646,6 +685,8 @@ function domainErrorResponse(c: { json: (value: unknown, status?: number) => Res
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error.code === "23505" || error.code === "SQLITE_CONSTRAINT_UNIQUE");
 }
+
+const opsLoginPageHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MKETY Ops sign in</title><style>body{font:16px system-ui;background:#f5f8fc;color:#10233f;margin:0;display:grid;min-height:100vh;place-items:center}.card{background:white;border:1px solid #e4eaf2;border-radius:16px;padding:32px;max-width:440px;margin:20px}a{display:inline-block;background:#006fff;color:white;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:700}.muted{color:#60728b;line-height:1.5}</style></head><body><main class="card"><p>MKETY Campaigns</p><h1>Operator sign in</h1><p class="muted">Use your MKETY account to access the isolated Campaigns operations console.</p><p id="error" class="muted"></p><a href="/api/ops/auth/login">Continue with MKETY Auth</a></main><script>if(new URLSearchParams(location.search).has('error'))document.getElementById('error').textContent='Sign in was not completed. Check that your MKETY account is allowlisted, then try again.'</script></body></html>`;
 
 const operationsPageHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MKETY Ops · Campaigns</title><style>:root{font-family:Inter,system-ui,sans-serif;color:#10233f;background:#f5f8fc}*{box-sizing:border-box}body{margin:0}header{padding:22px max(24px,calc((100vw - 760px)/2));background:white;border-bottom:1px solid #e5ebf3}main{width:min(760px,calc(100% - 36px));margin:42px auto}.panel,.review{padding:22px;background:white;border:1px solid #e4eaf2;border-radius:14px;margin:16px 0}label{display:grid;gap:6px;margin:14px 0;color:#50627a;font-size:13px}input{padding:11px;border:1px solid #cbd6e4;border-radius:8px;font:inherit}button{border:0;border-radius:8px;padding:11px 15px;background:#006fff;color:white;font:inherit;font-weight:700;cursor:pointer}button.reject{background:#66758a;margin-left:8px}p{color:#60728b;line-height:1.55}#result,#review-result{overflow-wrap:anywhere}</style><meta name="referrer" content="no-referrer"></head><body><header><a href="/">MKETY Campaigns</a> / Ops administration</header><main><h1>Approve a customer workspace</h1><p>Creates one approved tenant and a single-use account invitation. Copy the link and send it to the invited owner through your chosen channel. The link expires after seven days.</p><section class="panel"><form id="invite-form"><label>Business name<input name="tenantName" maxlength="160" required></label><label>Owner email<input name="email" type="email" maxlength="254" required></label><button type="submit">Create invite</button></form><p id="result" role="status"></p></section><h2>Campaigns awaiting review</h2><p>Approval records the Ops decision only. It does not queue or send messages.</p><p id="review-result" role="status"></p><section id="review-list"></section><h2>Approved email campaigns</h2><p>Queueing is a separate, explicit action. The worker sends at most one message per job and stops for manual review after uncertain provider results.</p><p id="dispatch-result" role="status"></p><section id="approved-list"></section></main><script>const form=document.getElementById('invite-form'),result=document.getElementById('result'),reviewList=document.getElementById('review-list'),reviewResult=document.getElementById('review-result'),approvedList=document.getElementById('approved-list'),dispatchResult=document.getElementById('dispatch-result');form.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(form));try{const r=await fetch('/api/ops/tenant-invitations',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(data)}),payload=await r.json();if(!r.ok)throw Error(payload.error);result.textContent='Invite created. Copy and send this one-time link: '+payload.inviteUrl;form.reset()}catch(error){result.textContent=error.message==='unauthorized'||error.message==='forbidden'?'Sign in as an MFA-enabled Ops administrator.':'Invite could not be created. Check the business name and email.'}});async function loadReviews(){try{const r=await fetch('/api/ops/campaigns/review',{credentials:'same-origin'}),d=await r.json();if(!r.ok)throw Error(d.error);reviewList.replaceChildren();for(const c of d.campaigns||[]){const card=document.createElement('article');card.className='review';const title=document.createElement('strong');title.textContent=(c.subject||'SMS campaign')+' · '+c.channel+' · '+c.tenantId;const body=document.createElement('p');body.textContent=c.bodyText;card.append(title,body);for(const decision of ['approve','reject']){const button=document.createElement('button');button.textContent=decision==='approve'?'Approve':'Reject';if(decision==='reject')button.className='reject';button.addEventListener('click',async()=>{try{const response=await fetch('/api/ops/campaigns/'+encodeURIComponent(c.id)+'/review',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({decision})}),result=await response.json();if(!response.ok)throw Error(result.error);reviewResult.textContent='Decision recorded. No message was sent.';await loadReviews()}catch(error){reviewResult.textContent='Could not record the review decision.'}});card.append(button)}reviewList.append(card)}if(!reviewList.childElementCount)reviewList.textContent='No campaigns are waiting for review.'}catch(error){reviewList.textContent='Sign in as an MFA-enabled Ops administrator to view this queue.'}}async function loadApproved(){try{const r=await fetch('/api/ops/campaigns/approved',{credentials:'same-origin'}),d=await r.json();if(!r.ok)throw Error(d.error);approvedList.replaceChildren();for(const c of d.campaigns||[]){const card=document.createElement('article');card.className='review';const title=document.createElement('strong');title.textContent=(c.subject||'SMS campaign')+' · '+c.channel+' · '+c.tenantId;const body=document.createElement('p');body.textContent=c.bodyText;card.append(title,body);if(c.channel==='email'&&d.dispatchEnabled){const button=document.createElement('button');button.textContent='Queue campaign delivery';button.addEventListener('click',async()=>{if(!confirm('Queue this approved email campaign for up to '+d.recipientLimit+' eligible, consented recipients? This starts real email delivery.'))return;button.disabled=true;try{const response=await fetch('/api/ops/campaigns/'+encodeURIComponent(c.id)+'/dispatch',{method:'POST',credentials:'same-origin'}),result=await response.json();if(!response.ok)throw Error(result.error);dispatchResult.textContent='Queued '+result.queued+' recipient messages. The worker will process them.';await loadApproved()}catch(error){dispatchResult.textContent=error.message==='campaign_dispatch_disabled'?'Campaign delivery is disabled by the operator.':'This campaign could not be queued. Check sender readiness, consent, suppression, and the recipient cap.'}finally{button.disabled=false}});card.append(button)}approvedList.append(card)}if(!approvedList.childElementCount)approvedList.textContent='No approved campaigns.'}catch(error){approvedList.textContent='Sign in as an MFA-enabled Ops administrator to view approved campaigns.'}}loadReviews();loadApproved();</script></body></html>`;
 
