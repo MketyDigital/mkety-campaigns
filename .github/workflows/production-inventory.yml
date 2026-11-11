@@ -25,13 +25,18 @@ jobs:
       ZITADEL_URL: ${{ secrets.ZITADEL_URL || vars.ZITADEL_URL }}
       ZITADEL_MANAGEMENT_PAT: ${{ secrets.ZITADEL_MANAGEMENT_PAT }}
       ZITADEL_PROJECT_ID: ${{ secrets.ZITADEL_PROJECT_ID }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL || secrets.OCI_DATABASE_URL || secrets.POSTGRES_URL }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.MKETY_DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL || secrets.OCI_DATABASE_URL || secrets.POSTGRES_URL }}
       BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
       ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
       OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
       OCI_EMAIL_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || secrets.CF_R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || secrets.CF_R2_SECRET_ACCESS_KEY }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || secrets.MKETY_CF_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || secrets.MKETY_CF_R2_ACCESS || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || secrets.CF_R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || secrets.MKETY_CF_R2_TOKEN || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || secrets.CF_R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT || secrets.MKETY_CF_R2_ENDPOINT }}
+      AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+      OCI_OBJECT_STORAGE_ACCESS_KEY_ID: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY_ID }}
+      OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
     steps:
       - name: Report required secret availability
@@ -43,7 +48,8 @@ jobs:
             'COOLIFY_API_TOKEN','CLOUDFLARE_API_TOKEN','ZITADEL_URL','ZITADEL_MANAGEMENT_PAT',
             'ZITADEL_PROJECT_ID','DATABASE_URL','BETTER_AUTH_SECRET',
             'ACS_EMAIL_CONNECTION_STRING','OCI_EMAIL_PRIVATE_KEY','OCI_EMAIL_TENANCY_OCID',
-            'R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','AZURE_STORAGE_CONNECTION_STRING'
+            'R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_ENDPOINT','AZURE_STORAGE_CONNECTION_STRING','AZURE_STORAGE_CONTAINER',
+            'OCI_OBJECT_STORAGE_ACCESS_KEY_ID','OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY'
           ];
           for (const key of vars) console.log(key + ': ' + (process.env[key] ? 'present' : 'missing'));
           const out = process.env.GITHUB_STEP_SUMMARY;
@@ -64,6 +70,13 @@ jobs:
               exit 1
             fi
           done
+          for app_uuid in $(node - "$RUNNER_TEMP/coolify-applications.json" <<'NODE'
+          const fs=require('fs'),apps=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          for(const a of apps) if(/assist|auth/i.test([a.name,a.fqdn,a.domains].join(' '))&&a.uuid) console.log(a.uuid);
+          NODE
+          ); do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-envs-$app_uuid.json"
+          done
           for project_uuid in $(node - "$RUNNER_TEMP/coolify-projects.json" <<'NODE'
           const fs=require('fs'),d=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
           for(const p of d) if(p.uuid) console.log(p.uuid);
@@ -82,8 +95,16 @@ jobs:
             environmentsByProject.set(projectUuid,items.map(e=>({name:e.name,uuid:e.uuid})));
           }
           const related=apps.filter(a=>String(a.git_repository||'').toLowerCase().includes('mkety-campaigns')||/campaign/i.test(a.name||''));
-          console.log('Coolify applications:',apps.length,'; Campaigns candidates:',related.length);
+          const identityApps=apps.filter(a=>/assist|auth/i.test([a.name,a.fqdn,a.domains].join(' ')));
+          console.log('Coolify applications:',apps.length,'; Campaigns candidates:',related.length,'; Assist/Auth candidates:',identityApps.length);
+          for(const a of identityApps) console.log('Identity app:',JSON.stringify({name:a.name,uuid:a.uuid,domains:a.domains||a.fqdn}));
           for(const a of related) console.log(JSON.stringify({name:a.name,repository:a.git_repository,branch:a.git_branch,uuid:a.uuid,domains:a.domains||a.fqdn}));
+          for(const a of identityApps){
+            const target=path.join(dir,'coolify-envs-'+a.uuid+'.json');
+            const envs=JSON.parse(fs.readFileSync(target,'utf8'));
+            const rows=Array.isArray(envs)?envs:(envs.data||envs.envs||[]);
+            console.log('Identity environment keys:',JSON.stringify({app:a.name,keys:rows.map(e=>e.key).filter(Boolean)}));
+          }
           console.log('Coolify projects:',projects.length);
           for(const p of projects) console.log(JSON.stringify({name:p.name,uuid:p.uuid,environments:environmentsByProject.get(p.uuid)||[]}));
           console.log('Coolify databases:',databases.length);
