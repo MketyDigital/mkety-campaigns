@@ -41,7 +41,7 @@ export function checkReleaseEnvironment(env) {
     if (issuer.protocol !== "https:" || issuer.username || issuer.password || issuer.search || issuer.hash) errors.push("MKETY_OPS_AUTH_ISSUER must be a clean HTTPS issuer URL");
   } catch { errors.push("MKETY_OPS_AUTH_ISSUER must be a valid HTTPS URL"); }
   if (!oidcClientId.trim()) errors.push("MKETY_OPS_AUTH_CLIENT_ID is required");
-  if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(oidcEmail.trim())) errors.push("MKETY_OPS_ALLOWED_EMAIL must be a single operator email");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(oidcEmail.trim())) errors.push("MKETY_OPS_ALLOWED_EMAIL must be a single operator email");
   try {
     const callback = new URL(oidcCallback);
     const expected = env.RELEASE_EXPECTED_ORIGIN || "https://campaign.mkety.com";
