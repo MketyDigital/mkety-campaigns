@@ -376,14 +376,30 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
     if (!isTrustedMutationOrigin(c.req.raw, security.trustedOrigins)) return c.json({ error: "untrusted_origin" }, 403);
     return security.operatorAuth.logout(c.req.raw.headers);
   });
-  app.get("/api/ops/system/status", async (c) => c.json({
-    service: "mkety-campaigns",
-    observedAt: new Date().toISOString(),
-    database: { ready: await c.get("databaseReady")() },
-    authentication: { operatorSession: "active", identityProvider: "MKETY OIDC" },
-    email: { sendingEnabled: campaignDispatchEnabled, dispatchConfigured: Boolean(campaignDispatch), recipientLimit: campaignRecipientLimit, testSendConfigured: Boolean(emailTestSender) },
-    components: { campaignWorkspace: Boolean(workspace), domainManagement: Boolean(domains), senderManagement: Boolean(senders) },
-  }));
+  app.get("/api/ops/system/status", async (c) => {
+    let emailEmergencyStop = true;
+    try { emailEmergencyStop = campaignDispatch?.getOpsControlStatus ? (await campaignDispatch.getOpsControlStatus()).emailEmergencyStop : true; }
+    catch { emailEmergencyStop = true; }
+    return c.json({
+      service: "mkety-campaigns",
+      observedAt: new Date().toISOString(),
+      database: { ready: await c.get("databaseReady")() },
+      authentication: { operatorSession: "active", identityProvider: "MKETY OIDC" },
+      email: { sendingEnabled: campaignDispatchEnabled, emergencyStop: emailEmergencyStop, dispatchConfigured: Boolean(campaignDispatch), recipientLimit: campaignRecipientLimit, testSendConfigured: Boolean(emailTestSender) },
+      components: { campaignWorkspace: Boolean(workspace), domainManagement: Boolean(domains), senderManagement: Boolean(senders) },
+    });
+  });
+  app.post("/api/ops/system/emergency-stop", async (c) => {
+    if (!campaignDispatch?.setEmergencyStop) return c.json({ error: "campaign_controls_not_configured" }, 503);
+    const payload = await c.req.json().catch(() => null) as { paused?: unknown } | null;
+    if (typeof payload?.paused !== "boolean") return c.json({ error: "emergency_stop_value_invalid" }, 400);
+    try {
+      await campaignDispatch.setEmergencyStop(payload.paused, c.get("opsUserId"));
+      return c.json({ emailEmergencyStop: payload.paused });
+    } catch {
+      return c.json({ error: "emergency_stop_update_failed" }, 500);
+    }
+  });
 
   app.get("/api/tenant/me", (c) => {
     const scope = c.get("tenantContext");
