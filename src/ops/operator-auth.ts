@@ -121,7 +121,9 @@ async function verifyIdToken(token: string, jwksUri: string, issuer: string, cli
   const jwks = await response.json() as Jwks, jwk = jwks.keys?.find((key) => key.kid === header.kid);
   if (!jwk) throw new Error("oidc_signing_key_missing");
   const publicKey = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-  const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, fromBase64Url(parts[2]!), encoder.encode(parts[0] + "." + parts[1]));
+  const signature = toArrayBuffer(fromBase64Url(parts[2]!));
+  const signedContent = toArrayBuffer(encoder.encode(parts[0] + "." + parts[1]));
+  const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, signature, signedContent);
   if (!valid) throw new Error("id_token_signature_invalid");
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud], now = Math.floor(Date.now() / 1000);
   if (normalizeIssuer(claims.iss || "") !== issuer || !audience.includes(clientId) || (audience.length > 1 && claims.azp !== clientId)) throw new Error("id_token_claims_invalid");
@@ -152,3 +154,4 @@ function readCookie(cookie: string, name: string): string | null {
 function sessionCookie(token: string, maxAge: number): string {
   return COOKIE + "=" + token + "; Path=/; Max-Age=" + maxAge + "; HttpOnly; Secure; SameSite=Strict";
 }
+\nfunction toArrayBuffer(bytes: Uint8Array): ArrayBuffer {\n  const copy = new Uint8Array(bytes.byteLength);\n  copy.set(bytes);\n  return copy.buffer;\n}\n
