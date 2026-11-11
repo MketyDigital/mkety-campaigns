@@ -15,9 +15,10 @@ export class CampaignDispatchConflictError extends Error {
 }
 
 export class PostgresCampaignDispatchRepository implements CampaignDispatchRepository {
-  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000) {
+  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000, private readonly providerMinIntervalMs = 1000) {
     validateDispatchSettings(publicBaseUrl);
     normalizeDailyRecipientLimit(dailyRecipientLimit);
+    if (!Number.isInteger(providerMinIntervalMs) || providerMinIntervalMs < 250 || providerMinIntervalMs > 60_000) throw new Error("EMAIL_PROVIDER_MIN_INTERVAL_MS must be between 250 and 60000");
   }
 
   async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean }> {
@@ -108,6 +109,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
+      const emergencyStop = await client.query<{ email_emergency_stop: boolean }>("SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE FOR SHARE");
+      if (emergencyStop.rows[0]?.email_emergency_stop !== false) { await client.query("COMMIT"); return null; }
       await client.query(
         `UPDATE campaign_jobs SET status = 'uncertain', locked_at = NULL,
              last_error = 'Worker lease expired; reconcile before retrying.'
@@ -133,6 +136,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
         await client.query("COMMIT");
         return null;
       }
+      const throttle = await client.query("INSERT INTO campaign_provider_throttle_slots (provider,next_allowed_at) VALUES ($1,NOW() + ($2::int * INTERVAL '1 millisecond')) ON CONFLICT (provider) DO UPDATE SET next_allowed_at=NOW() + ($2::int * INTERVAL '1 millisecond') WHERE campaign_provider_throttle_slots.next_allowed_at <= NOW() RETURNING provider", [row.provider, this.providerMinIntervalMs]);
+      if (!throttle.rows.length) { await client.query("COMMIT"); return null; }
       await client.query("UPDATE campaign_jobs SET status = 'sending', locked_at = NOW(), attempts = attempts + 1 WHERE id = $1", [row.id]);
       await client.query("COMMIT");
       return mapDeliveryJob(row, buildUnsubscribeUrl(this.publicBaseUrl, row.unsubscribe_token).href);
