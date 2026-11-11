@@ -14,3 +14,8 @@ CREATE TABLE IF NOT EXISTS campaign_ops_audit (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS campaign_ops_audit_created_idx ON campaign_ops_audit (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS campaign_provider_throttle_slots (
+  provider TEXT PRIMARY KEY CHECK (provider IN ('acs-email','oci-email-delivery')),
+  next_allowed_at TIMESTAMPTZ NOT NULL
+);
