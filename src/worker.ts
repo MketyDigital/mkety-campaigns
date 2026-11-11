@@ -35,6 +35,7 @@ export default {
     EMAIL_TEST_SEND_ENABLED?: string;
     EMAIL_CAMPAIGN_SEND_ENABLED?: string;
     EMAIL_CAMPAIGN_MAX_RECIPIENTS?: string;
+    EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT?: string;
   }): Response | Promise<Response> {
     const auth = env.BETTER_AUTH_SECRET && env.BETTER_AUTH_URL ? createAuth(env.DB, env) : undefined;
     const domainRepository = new D1DomainRepository(env.DB);
@@ -93,7 +94,7 @@ export default {
         return result?.allowed === 1;
       },
     } : undefined, domains, new D1CampaignWorkspace(env.DB), env.BETTER_AUTH_URL ? new D1OperationsService(env.DB, env.BETTER_AUTH_URL) : undefined, senders, emailTestSender,
-      env.EMAIL_CAMPAIGN_SEND_ENABLED === "true" && env.BETTER_AUTH_URL ? new D1CampaignDispatchRepository(env.DB, env.BETTER_AUTH_URL) : undefined,
+      env.EMAIL_CAMPAIGN_SEND_ENABLED === "true" && env.BETTER_AUTH_URL ? new D1CampaignDispatchRepository(env.DB, env.BETTER_AUTH_URL, Number(env.EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT ?? 1000)) : undefined,
       env.EMAIL_CAMPAIGN_SEND_ENABLED === "true", Number(env.EMAIL_CAMPAIGN_MAX_RECIPIENTS ?? 100));
     return app.fetch(request, env);
   },
@@ -110,11 +111,12 @@ export default {
     OCI_EMAIL_PRIVATE_KEY?: string;
     OCI_EMAIL_COMPARTMENT_OCID?: string;
     EMAIL_CAMPAIGN_SEND_ENABLED?: string;
+    EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT?: string;
   }, context: ExecutionContext): void {
     if (env.EMAIL_CAMPAIGN_SEND_ENABLED !== "true" || !env.BETTER_AUTH_URL) return;
     const providers = createOptionalEmailProviders(env);
     if (!providers.length) return;
-    const repository = new D1CampaignDispatchRepository(env.DB, env.BETTER_AUTH_URL);
+    const repository = new D1CampaignDispatchRepository(env.DB, env.BETTER_AUTH_URL, Number(env.EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT ?? 1000));
     const worker = createEmailCampaignWorker(repository, providers, true);
     context.waitUntil(worker.processOne().then(() => undefined));
   },
