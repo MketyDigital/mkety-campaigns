@@ -5,6 +5,9 @@ import { buildUnsubscribeUrl, createOpaqueUnsubscribeToken } from "../email/unsu
 
 export interface CampaignDispatchRepository extends CampaignDeliveryRepository {
   queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number>;
+  getOpsControlStatus?(): Promise<{ emailEmergencyStop: boolean }>;
+  setEmergencyStop?(paused: boolean, actorUserId: string): Promise<void>;
+  isEmergencyStopActive?(): Promise<boolean>;
 }
 
 export class CampaignDispatchConflictError extends Error {
@@ -15,6 +18,38 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
   constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000) {
     validateDispatchSettings(publicBaseUrl);
     normalizeDailyRecipientLimit(dailyRecipientLimit);
+  }
+
+  async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean }> {
+    const result = await this.database.query<{ email_emergency_stop: boolean }>(
+      "SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE",
+    );
+    return { emailEmergencyStop: result.rows[0]?.email_emergency_stop !== false };
+  }
+
+  async isEmergencyStopActive(): Promise<boolean> {
+    return (await this.getOpsControlStatus()).emailEmergencyStop;
+  }
+
+  async setEmergencyStop(paused: boolean, actorUserId: string): Promise<void> {
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "INSERT INTO campaign_ops_controls (id,email_emergency_stop,updated_at,updated_by) VALUES (TRUE,$1,NOW(),$2) ON CONFLICT (id) DO UPDATE SET email_emergency_stop=EXCLUDED.email_emergency_stop,updated_at=NOW(),updated_by=EXCLUDED.updated_by",
+        [paused, actorUserId],
+      );
+      await client.query(
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,$2,$3)",
+        [actorUserId, paused ? "email_emergency_stop_enabled" : "email_emergency_stop_disabled", JSON.stringify({ paused })],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number> {
