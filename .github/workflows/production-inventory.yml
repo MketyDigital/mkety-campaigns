@@ -58,21 +58,36 @@ jobs:
           case "$COOLIFY_URL" in https://*) ;; http://*) echo "Coolify URL uses HTTP; inventory stopped without sending a token." >&2; exit 1 ;; *) COOLIFY_URL="https://${COOLIFY_URL#//}" ;; esac
           api="${COOLIFY_URL%/}/api/v1"
           headers=(--header "Authorization: Bearer $COOLIFY_API_TOKEN" --header "Accept: application/json")
-          for resource in applications projects servers; do
+          for resource in applications projects servers databases; do
             if ! curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/$resource" > "$RUNNER_TEMP/coolify-$resource.json"; then
               echo "Coolify $resource inventory failed (no changes made)."
               exit 1
             fi
           done
+          for project_uuid in $(node - "$RUNNER_TEMP/coolify-projects.json" <<'NODE'
+          const fs=require('fs'),d=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          for(const p of d) if(p.uuid) console.log(p.uuid);
+          NODE
+          ); do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" "$api/projects/$project_uuid/environments" > "$RUNNER_TEMP/coolify-environments-$project_uuid.json"
+          done
           node - "$RUNNER_TEMP" <<'NODE'
           const fs=require('fs'), path=require('path'), dir=process.argv[2];
           const read=name=>JSON.parse(fs.readFileSync(path.join(dir,'coolify-'+name+'.json'),'utf8'));
-          const apps=read('applications'), projects=read('projects'), servers=read('servers');
+          const apps=read('applications'), projects=read('projects'), servers=read('servers'), databases=read('databases');
+          const environmentsByProject=new Map();
+          for(const name of fs.readdirSync(dir).filter(n=>n.startsWith('coolify-environments-'))){
+            const projectUuid=name.slice('coolify-environments-'.length,-5);
+            const items=JSON.parse(fs.readFileSync(path.join(dir,name),'utf8'));
+            environmentsByProject.set(projectUuid,items.map(e=>({name:e.name,uuid:e.uuid})));
+          }
           const related=apps.filter(a=>String(a.git_repository||'').toLowerCase().includes('mkety-campaigns')||/campaign/i.test(a.name||''));
           console.log('Coolify applications:',apps.length,'; Campaigns candidates:',related.length);
           for(const a of related) console.log(JSON.stringify({name:a.name,repository:a.git_repository,branch:a.git_branch,uuid:a.uuid,domains:a.domains||a.fqdn}));
           console.log('Coolify projects:',projects.length);
-          for(const p of projects) console.log(JSON.stringify({name:p.name,uuid:p.uuid, environments:(p.environments||[]).map(e=>({name:e.name,uuid:e.uuid}))}));
+          for(const p of projects) console.log(JSON.stringify({name:p.name,uuid:p.uuid,environments:environmentsByProject.get(p.uuid)||[]}));
+          console.log('Coolify databases:',databases.length);
+          for(const d of databases) console.log(JSON.stringify({name:d.name,uuid:d.uuid,type:d.type,status:d.status,project_uuid:d.project_uuid,environment_uuid:d.environment_uuid}));
           console.log('Coolify servers:',servers.length);
           for(const s of servers) console.log(JSON.stringify({name:s.name,uuid:s.uuid,ip:s.ip,status:s.settings?.is_reachable===false?'unreachable':'reported'}));
           const sum=process.env.GITHUB_STEP_SUMMARY;
