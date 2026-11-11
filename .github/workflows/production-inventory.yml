@@ -188,7 +188,7 @@ jobs:
             console.error('MKETY_DATABASE_URL is not a PostgreSQL URL; database name, host, and credentials were not printed.');
             process.exit(1);
           }
-          const database=decodeURIComponent(url.pathname).replace(/^\\//,'');
+          const database=decodeURIComponent(url.pathname.slice(1));
           console.log('Configured PostgreSQL database name:',database);
           console.log(database==='mkety_campaigns'
             ? 'Existing connection already targets the dedicated Campaigns database.'
@@ -212,15 +212,16 @@ jobs:
           const get=k=>envs.find(e=>e.key===k)?.real_value||envs.find(e=>e.key===k)?.value||'';
           const domain=String(authApp.domains||authApp.fqdn||'').split(',')[0].trim();
           const publicHost=get('ZITADEL_PUBLIC_HOST')||get('ZITADEL_INSTANCE_HOST');
-          let issuer=domain;
-          if(!/^https?:\\/\\//i.test(issuer)&&publicHost) issuer='https://'+publicHost;
-          issuer=issuer.replace(/\\/+$/,'');
+          const trimSlashes=value=>{while(value.endsWith('/')) value=value.slice(0,-1); return value};
+          let issuer=domain||publicHost||'';
+          if(!issuer.startsWith('https://')&&!issuer.startsWith('http://')) issuer='https://'+issuer;
+          issuer=trimSlashes(issuer);
           let discovery;
           try{
             const response=await fetch(issuer+'/.well-known/openid-configuration',{redirect:'error',signal:AbortSignal.timeout(10000)});
             if(!response.ok){console.log('MKETY Auth OIDC discovery: HTTP '+response.status);process.exit(0)}
             discovery=await response.json();
-            if(String(discovery.issuer||'').replace(/\\/+$/,'')!==issuer){console.log('MKETY Auth OIDC discovery: issuer mismatch');process.exit(0)}
+            if(trimSlashes(String(discovery.issuer||''))!==issuer){console.log('MKETY Auth OIDC discovery: issuer mismatch');process.exit(0)}
             console.log('MKETY Auth OIDC discovery: reachable and issuer verified');
           }catch{console.log('MKETY Auth OIDC discovery: unavailable from GitHub runner');process.exit(0)}
           const token=get('ZITADEL_SERVICE_USER_TOKEN');
