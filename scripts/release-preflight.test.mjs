@@ -6,6 +6,10 @@ const configured = {
   DATABASE_URL: "postgres://user:hidden@postgres.internal:5432/mkety_campaigns",
   BETTER_AUTH_URL: "https://campaign.mkety.com",
   BETTER_AUTH_SECRET: "n9Fa7dq1HyH2pJ7s6eN0V3wX1L5Rk8Q4yT",
+  MKETY_OPS_AUTH_ISSUER: "https://auth.mkety.com",
+  MKETY_OPS_AUTH_CLIENT_ID: "campaigns-ops-client",
+  MKETY_OPS_ALLOWED_EMAIL: "hello@mkety.com",
+  MKETY_OPS_AUTH_CALLBACK_URL: "https://campaign.mkety.com/api/ops/auth/callback",
   EMAIL_CAMPAIGN_SEND_ENABLED: "false",
   EMAIL_TEST_SEND_ENABLED: "false",
   SMS_ENABLED: "false",
@@ -28,6 +32,13 @@ test("release preflight enforces HTTPS origin and strong non-placeholder auth se
   assert.match(checkReleaseEnvironment({ ...configured, BETTER_AUTH_URL: "https://evil.example" }).join(" "), /RELEASE_EXPECTED_ORIGIN/i);
   assert.match(checkReleaseEnvironment({ ...configured, BETTER_AUTH_SECRET: "short" }).join(" "), /BETTER_AUTH_SECRET/i);
   assert.match(checkReleaseEnvironment({ ...configured, BETTER_AUTH_SECRET: "a".repeat(40) }).join(" "), /BETTER_AUTH_SECRET/i);
+});
+
+test("release preflight requires valid MKETY Ops OIDC configuration", () => {
+  assert.match(checkReleaseEnvironment({ ...configured, MKETY_OPS_AUTH_ISSUER: "http://auth.mkety.com" }).join(" "), /MKETY_OPS_AUTH_ISSUER/i);
+  assert.match(checkReleaseEnvironment({ ...configured, MKETY_OPS_AUTH_CLIENT_ID: "" }).join(" "), /MKETY_OPS_AUTH_CLIENT_ID/i);
+  assert.match(checkReleaseEnvironment({ ...configured, MKETY_OPS_ALLOWED_EMAIL: "not-email" }).join(" "), /MKETY_OPS_ALLOWED_EMAIL/i);
+  assert.match(checkReleaseEnvironment({ ...configured, MKETY_OPS_AUTH_CALLBACK_URL: "https://campaign.mkety.com/wrong" }).join(" "), /MKETY_OPS_AUTH_CALLBACK_URL/i);
 });
 
 test("release preflight rejects enabled or absent delivery gates", () => {
