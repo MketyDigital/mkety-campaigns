@@ -28,6 +28,12 @@ Set `BETTER_AUTH_SECRET` to a random secret of at least 32 characters and `BETTE
 
 For a future Workers/D1 deployment, copy `wrangler.jsonc.example` to `wrangler.jsonc`, create the D1 database and R2 bucket, then fill in the generated D1 database ID. The Workers target shares the Hono routes and accesses D1/R2 through native bindings.
 
+### Read-only release configuration preflight
+
+Before attempting a Coolify production release, use `npm run release:preflight` in an appropriately configured trusted environment. This verifies that `DATABASE_URL` **names** the dedicated `mkety_campaigns` PostgreSQL database, `BETTER_AUTH_URL` is the expected HTTPS origin (default `https://campaign.mkety.com`, override with `RELEASE_EXPECTED_ORIGIN` for an explicitly approved staging host), `BETTER_AUTH_SECRET` meets basic length checks, recipient limits are valid, and the campaign, test-send, SMS and OCI-backup flags are all **explicitly false**. The command prints only check names, never secret values.
+
+**Passing this preflight does not prove** database isolation/ownership, migrated schema, domain/DNS/TLS, deployment, backup recoverability, or provider status. Verify those separately; never run customer-list imports or live sends merely because preflight passed. Run after reviewing runtime secrets, before any migration or deployment.
+
 ### Storage rules
 - Use tenant-prefixed opaque object keys; never put email addresses or other customer identifiers in keys.
 - Keep R2 as the active source. When a durable archive/backup job is added, it must copy to OCI Infrequent Access and Azure Blob, retry idempotently, and record status in `object_archive_manifest`.
