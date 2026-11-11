@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { D1CampaignDispatchRepository } from "./delivery-repository.js";
+import { D1EmailEventReconciler } from "../email/delivery-reconciliation.js";
 import { D1CampaignWorkspace } from "./repository.js";
 
 class SqliteD1 {
@@ -101,5 +102,46 @@ test("D1 campaign jobs retain and route the provider attached to the sender", as
     assert.equal(await repository.queueApproved("campaign-1", "ops-1", 1), 1);
     const job = await repository.claimNext();
     assert.equal(job?.provider, "oci-email-delivery");
+  } finally { db.close(); }
+});
+
+test("authenticated delivery reconciliation suppresses bounced contacts idempotently", async () => {
+  const db = new SqliteD1();
+  try {
+    await seedCampaign(db);
+    const queue = new D1CampaignDispatchRepository(db as unknown as D1Database, "https://campaign.mkety.com");
+    await queue.queueApproved("campaign-1", "ops-1", 10);
+    const job = await queue.claimNext();
+    assert.ok(job);
+    await queue.markAccepted(job.id, { provider: "acs-email", providerMessageId: "provider-message-1", acceptedAt: "2026-11-10T10:00:00Z" });
+    const reconciler = new D1EmailEventReconciler(db as unknown as D1Database);
+    const event = { provider: "acs-email", providerMessageId: "provider-message-1", eventId: "evt-1", outcome: "bounced", occurredAt: "2026-11-10T11:00:00Z" };
+    assert.equal(await reconciler.reconcile(event), "recorded");
+    assert.equal(await reconciler.reconcile(event), "duplicate");
+    const attempt = await db.prepare("SELECT status FROM delivery_attempts WHERE provider_message_id = 'provider-message-1'").first<{ status: string }>();
+    assert.equal(attempt?.status, "bounced");
+    const block = await db.prepare("SELECT reason, address_normalized FROM suppressions WHERE tenant_id = 'tenant-1' AND channel = 'email'").first<{ reason: string; address_normalized: string }>();
+    assert.equal(block?.reason, "bounced");
+    assert.equal(block?.address_normalized, "person1@example.com");
+    const count = await db.prepare("SELECT COUNT(*) AS count FROM email_delivery_events").first<{ count: number }>();
+    assert.equal(count?.count, 1);
+    assert.equal(await reconciler.reconcile({ ...event, eventId: "evt-late", outcome: "delivered", occurredAt: "2026-11-10T12:00:00Z" }), "recorded");
+    const after = await db.prepare("SELECT status FROM delivery_attempts WHERE provider_message_id = 'provider-message-1'").first<{ status: string }>();
+    assert.equal(after?.status, "bounced", "late delivery confirmation must not unsuppress a bounce");
+  } finally { db.close(); }
+});
+
+test("reconciliation cannot select arbitrary tenants and ignores unknown provider messages", async () => {
+  const db = new SqliteD1();
+  try {
+    await seedCampaign(db);
+    const reconciler = new D1EmailEventReconciler(db as unknown as D1Database);
+    assert.equal(await reconciler.reconcile({
+      provider: "acs-email", eventId: "unknown", providerMessageId: "unmatched",
+      outcome: "complained", occurredAt: "2026-11-10T11:00:00Z",
+      tenantId: "tenant-1", recipient: "person1@example.com",
+    }), "unmatched");
+    const count = await db.prepare("SELECT COUNT(*) AS count FROM suppressions").first<{ count: number }>();
+    assert.equal(count?.count, 0);
   } finally { db.close(); }
 });
