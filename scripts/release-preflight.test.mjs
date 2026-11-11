@@ -5,7 +5,7 @@ import { checkReleaseEnvironment } from "./release-preflight.mjs";
 const configured = {
   DATABASE_URL: "postgres://user:hidden@postgres.internal:5432/mkety_campaigns",
   BETTER_AUTH_URL: "https://campaign.mkety.com",
-  BETTER_AUTH_SECRET: "example-password-manager-generated-key-9f83de",
+  BETTER_AUTH_SECRET: "n9Fa7dq1HyH2pJ7s6eN0V3wX1L5Rk8Q4yT",
   EMAIL_CAMPAIGN_SEND_ENABLED: "false",
   EMAIL_TEST_SEND_ENABLED: "false",
   SMS_ENABLED: "false",
