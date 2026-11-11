@@ -49,8 +49,9 @@ test("Ops dashboard redirects to MKETY Auth when no operator session exists", as
 
 test("Ops login offers the MKETY identity provider", async () => {
   const response = await createApp().request("/ops-login");
-  assert.match(await response.text(), /Continue with MKETY Auth/);
-  assert.match(await response.text(), /\/api\/ops\/auth\/login/);
+  const html = await response.text();
+  assert.match(html, /Continue with MKETY Auth/);
+  assert.match(html, /\/api\/ops\/auth\/login/);
 });
 
 test("health endpoint stays available without external services", async () => {
