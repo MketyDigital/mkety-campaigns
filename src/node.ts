@@ -10,6 +10,7 @@ import { PostgresCampaignWorkspace } from "./campaigns/repository.js";
 import { PostgresCampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import { createEmailCampaignWorker } from "./campaigns/delivery.js";
 import { PostgresOperationsService } from "./ops/service.js";
+import { createOperatorAuth } from "./ops/operator-auth.js";
 import { createOptionalEmailProviders, createSelectedEmailProvider } from "./email/providers.js";
 import { createEmailTestSender } from "./email/test-send.js";
 
@@ -49,6 +50,7 @@ const campaignWorker = campaignDispatchEnabled && campaignDispatch && emailProvi
 const operations = pool && process.env.BETTER_AUTH_URL
   ? new PostgresOperationsService(pool, process.env.BETTER_AUTH_URL)
   : undefined;
+const operatorAuth = pool ? createOperatorAuth(pool, process.env) : undefined;
 const app = createApp(async () => {
   if (!pool) return false;
   try {
@@ -77,6 +79,7 @@ const app = createApp(async () => {
     );
     return result.rows[0]?.tenant_id ?? null;
   },
+  operatorAuth,
   resolveOpsAdmin: async (userId, sessionCreatedAt) => {
     const result = await pool.query<{ allowed: boolean }>(
       `SELECT TRUE AS allowed FROM users
