@@ -41,6 +41,18 @@ function fakeDomainService(overrides: Partial<TenantDomainService> = {}): Tenant
   };
 }
 
+test("Ops dashboard redirects to MKETY Auth when no operator session exists", async () => {
+  const response = await createApp().request("/app/ops");
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), "/ops-login?error=not_configured");
+});
+
+test("Ops login offers the MKETY identity provider", async () => {
+  const response = await createApp().request("/ops-login");
+  assert.match(await response.text(), /Continue with MKETY Auth/);
+  assert.match(await response.text(), /\/api\/ops\/auth\/login/);
+});
+
 test("health endpoint stays available without external services", async () => {
   const response = await createApp().request("/healthz");
   assert.equal(response.status, 200);
