@@ -39,6 +39,15 @@ jobs:
       OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY }}
       AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install repository dependencies for read-only database checks
+        run: npm ci
+
       - name: Report required secret availability
         shell: bash
         run: |
@@ -218,6 +227,25 @@ jobs:
             : 'Existing connection targets the MKETY database. No app migrations were run; Campaigns must use a separate mkety_campaigns database on the same PostgreSQL service.');
           NODE
 
+      - name: Check shared Postgres connectivity and database creation permission
+        if: env.DATABASE_URL != ''
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          import pg from 'pg';
+          const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:7000,max:1});
+          try{
+            const result=await pool.query("SELECT current_database() AS database, (SELECT rolcreatedb FROM pg_roles WHERE rolname=current_user) AS can_create_database, EXISTS (SELECT 1 FROM pg_database WHERE datname='mkety_campaigns') AS campaigns_database_exists");
+            const row=result.rows[0];
+            console.log('MKETY PostgreSQL connection: successful');
+            console.log('Campaigns DB provision readiness:',JSON.stringify({connectedToMketyDatabase:row.database==='mkety',canCreateDatabase:row.can_create_database===true,campaignsDatabaseExists:row.campaigns_database_exists===true}));
+          }catch(error){
+            console.log('MKETY PostgreSQL connection: not reachable from the GitHub runner; SQLSTATE:',error?.code||'unavailable');
+          }finally{
+            await pool.end();
+          }
+          NODE
+
       - name: Resolve the existing Coolify host for manual DNS setup
         shell: bash
         run: |
@@ -245,7 +273,7 @@ jobs:
           if(!app){console.log('MKETY Auth Coolify app: not found');process.exit(0)}
           const envSource=JSON.parse(fs.readFileSync(path.join(dir,'coolify-envs-'+app.uuid+'.json'),'utf8'));
           const envs=Array.isArray(envSource)?envSource:(envSource.data||envSource.envs||[]);
-          const get=k=>envs.find(e=>e.key===k)?.real_value||envs.find(e=>e.key===k)?.value||'';
+          const get=k=>envs.filter(e=>e.key===k).map(e=>e.real_value||e.value||'').find(v=>typeof v==='string'&&v.length>0)||'';
           const trim=value=>{while(value.endsWith('/'))value=value.slice(0,-1);return value};
           const normalize=raw=>{
             if(!raw)return null;
