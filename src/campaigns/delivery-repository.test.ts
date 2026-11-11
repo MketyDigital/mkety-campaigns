@@ -103,3 +103,37 @@ test("D1 campaign jobs retain and route the provider attached to the sender", as
     assert.equal(job?.provider, "oci-email-delivery");
   } finally { db.close(); }
 });
+
+test("D1 daily tenant budget cannot be bypassed by queueing a second campaign", async () => {
+  const db = new SqliteD1();
+  try {
+    await seedCampaign(db, 2);
+    await db.prepare(
+      "INSERT INTO campaigns (id, tenant_id, channel, status, sender_identity_id, subject, body_text) VALUES ('campaign-2', 'tenant-1', 'email', 'approved', 'sender-1', 'Another', 'Body')",
+    ).run();
+    const first = new D1CampaignDispatchRepository(db as unknown as D1Database, "https://campaign.mkety.com", 3);
+    assert.equal(await first.queueApproved("campaign-1", "ops-1", 2), 2);
+    const second = new D1CampaignDispatchRepository(db as unknown as D1Database, "https://campaign.mkety.com", 3);
+    await assert.rejects(second.queueApproved("campaign-2", "ops-1", 2), /daily email recipient budget exceeded/i);
+    const jobs = await db.prepare("SELECT COUNT(*) AS count FROM campaign_jobs").first<{ count: number }>();
+    const tokens = await db.prepare("SELECT COUNT(*) AS count FROM unsubscribe_tokens").first<{ count: number }>();
+    const reservation = await db.prepare(
+      "SELECT reserved_count, max_recipients FROM tenant_daily_email_reservations WHERE tenant_id = 'tenant-1'",
+    ).first<{ reserved_count: number; max_recipients: number }>();
+    const rejected = await db.prepare("SELECT status FROM campaigns WHERE id = 'campaign-2'").first<{ status: string }>();
+    assert.equal(jobs?.count, 2, "exceeding the budget must not create campaign jobs");
+    assert.equal(tokens?.count, 2, "exceeding the budget must not create unsubscribe records");
+    assert.equal(reservation?.reserved_count, 2, "failed reservations roll back");
+    assert.equal(reservation?.max_recipients, 3);
+    assert.equal(rejected?.status, "approved", "operator may review the declined campaign");
+  } finally { db.close(); }
+});
+
+test("D1 campaign recipient budget configuration rejects invalid values", async () => {
+  const db = new SqliteD1();
+  try {
+    for (const invalid of [0, -1, 1.5, Number.NaN, 100001]) {
+      assert.throws(() => new D1CampaignDispatchRepository(db as unknown as D1Database, "https://campaign.mkety.com", invalid), /daily email recipient budget/i);
+    }
+  } finally { db.close(); }
+});
