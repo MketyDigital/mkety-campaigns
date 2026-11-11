@@ -10,7 +10,7 @@ export interface OperatorAuth {
 type Env = { MKETY_OPS_AUTH_ISSUER?: string; MKETY_OPS_AUTH_CLIENT_ID?: string; MKETY_OPS_ALLOWED_EMAIL?: string; MKETY_OPS_AUTH_CALLBACK_URL?: string };
 type Discovery = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string };
 type TokenResponse = { id_token?: string };
-type Claims = { iss?: string; aud?: string | string[]; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean };
+type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean };
 type Jwks = { keys?: Array<JsonWebKey & { kid?: string }> };
 const COOKIE = "mkety_campaigns_ops";
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -124,7 +124,7 @@ async function verifyIdToken(token: string, jwksUri: string, issuer: string, cli
   const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", publicKey, fromBase64Url(parts[2]!), encoder.encode(parts[0] + "." + parts[1]));
   if (!valid) throw new Error("id_token_signature_invalid");
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud], now = Math.floor(Date.now() / 1000);
-  if (normalizeIssuer(claims.iss || "") !== issuer || !audience.includes(clientId)) throw new Error("id_token_claims_invalid");
+  if (normalizeIssuer(claims.iss || "") !== issuer || !audience.includes(clientId) || (audience.length > 1 && claims.azp !== clientId)) throw new Error("id_token_claims_invalid");
   if (!claims.exp || claims.exp <= now || !claims.iat || claims.iat > now + 60 || claims.nonce !== nonce) throw new Error("id_token_time_or_nonce_invalid");
   if (claims.email_verified !== true || typeof claims.email !== "string") throw new Error("operator_email_unverified");
   return claims.email.trim().toLowerCase();
