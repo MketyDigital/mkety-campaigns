@@ -14,12 +14,15 @@ export function checkReleaseEnvironment(env) {
     database = new URL(env.DATABASE_URL ?? "");
     if (!["postgres:", "postgresql:"].includes(database.protocol)) {
       errors.push("DATABASE_URL must use PostgreSQL");
-    } else if (decodeURIComponent(database.pathname) !== "/mkety_campaigns") {
-      errors.push("DATABASE_URL must target the dedicated mkety_campaigns database");
+    } else if (decodeURIComponent(database.pathname) !== "/mkety") {
+      errors.push("DATABASE_URL must target the shared mkety database");
     }
     if (!database.hostname) errors.push("DATABASE_URL must include a database host");
   } catch {
     errors.push("DATABASE_URL must be a valid PostgreSQL URL");
+  }
+  if (env.CAMPAIGNS_DB_SCHEMA !== "campaigns") {
+    errors.push("CAMPAIGNS_DB_SCHEMA must be campaigns to isolate Campaigns tables");
   }
   let auth;
   try {
