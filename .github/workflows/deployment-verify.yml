@@ -87,12 +87,15 @@ jobs:
             const knownNpmCodes = new Set(['EAI_AGAIN','ECONNREFUSED','ECONNRESET','EEXIST','EINTEGRITY','EINVAL','EISDIR','ENOENT','ENOTFOUND','EACCES','EPERM','E401','E403','E404','ETIMEDOUT','ERESOLVE','EBADENGINE']);
             const npmCodes = [...new Set([...logs.matchAll(/npm (?:ERR!|error) code ([A-Z0-9_]{3,16})/gi)].map(match => match[1].toUpperCase()).filter(code => knownNpmCodes.has(code)))];
             const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
-            const unresolvedImports = [...new Set([...logs.matchAll(/Cannot find module\s+['"]([A-Za-z0-9@._:\/-]{1,180})['"]/gi)].map(match => match[1]))];
+            const diagnosticLogs = logs.replace(/\u001b\\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u0000/g, '');
+            const unresolvedImports = [...new Set([...diagnosticLogs.matchAll(/Cannot find module\\s+(['\"])([^'\"]{1,180})\\1/gi)].map(match => /^[A-Za-z0-9@._:/-]+$/.test(match[2]) ? match[2] : '[nonstandard module specifier]'))];
+            const typescriptLocations = [...new Set([...diagnosticLogs.matchAll(/([A-Za-z0-9_./-]+\\.tsx?)\\((\\d{1,6}),\\d+\\):\\s*error TS2307/g)].map(match => match[1].split('/').pop() + ':' + match[2]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
             if (npmCodes.length) console.log('npm error codes:', JSON.stringify(npmCodes));
             if (typescriptCodes.length) console.log('TypeScript error codes:', JSON.stringify(typescriptCodes));
             if (unresolvedImports.length) console.log('TypeScript unresolved module specifiers:', JSON.stringify(unresolvedImports));
+            if (typescriptLocations.length) console.log('TypeScript TS2307 source locations:', JSON.stringify(typescriptLocations));
             if (categories.length === 0 && sqlstates.length === 0 && npmCodes.length === 0 && typescriptCodes.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
           }
           NODE
