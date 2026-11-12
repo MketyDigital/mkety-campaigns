@@ -69,6 +69,7 @@ jobs:
           NODE
 
       - name: Inspect Coolify without changing resources
+        id: coolify_inventory
         if: env.COOLIFY_API_TOKEN != ''
         continue-on-error: true
         shell: bash
@@ -287,7 +288,7 @@ jobs:
           NODE
 
       - name: Check MKETY Auth discovery and service-user read access
-        if: env.COOLIFY_API_TOKEN != ''
+        if: env.COOLIFY_API_TOKEN != '' && steps.coolify_inventory.outcome == 'success'
         shell: bash
         run: |
           set -euo pipefail
