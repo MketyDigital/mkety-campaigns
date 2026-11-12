@@ -125,6 +125,7 @@ jobs:
               addresses = []
               stage = "VNIC-attachment-list"
               for instance in instances:
+                  stage = "VNIC-attachment-list"
                   attachments = oci.pagination.list_call_get_all_results(
                       compute.list_vnic_attachments,
                       compartment_id=instance.compartment_id,
