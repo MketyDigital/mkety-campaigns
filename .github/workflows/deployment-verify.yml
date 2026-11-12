@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/deployment-verify.yml
+      - .github/workflows/provision-campaigns.yml
+      - Dockerfile
   workflow_dispatch:
 
 permissions:
