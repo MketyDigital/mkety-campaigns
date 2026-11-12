@@ -91,8 +91,14 @@ jobs:
           const candidates = databases.filter(item => item.name === 'mkety-postgres');
           if (candidates.length !== 1) throw new Error('Expected exactly one healthy mkety-postgres resource; no resource was created.');
           const database = await request('/databases/' + candidates[0].uuid);
-          const dbEnvironment = database.environment_uuid || database.environment?.uuid || database.environmentUuid;
-          const dbServer = database.server_uuid || database.destination?.server_uuid || database.server?.uuid;
+          const dbEnvironment = database.environment_uuid || database.environment?.uuid || database.environmentUuid ||
+            (environment.id != null && String(database.environment_id) === String(environment.id) ? environment.uuid : null);
+          let dbServer = database.server_uuid || database.destination?.server_uuid || database.destination?.server?.uuid || database.server?.uuid;
+          const destinationUuid = database.destination?.uuid || (typeof database.destination === 'string' ? database.destination : null);
+          if (!dbServer && destinationUuid) {
+            const destination = await request('/destinations/' + destinationUuid);
+            dbServer = destination.server_uuid || destination.server?.uuid;
+          }
           if (!dbEnvironment || !dbServer) throw new Error('Could not verify the shared PostgreSQL placement from Coolify metadata; no app was created.');
           if (dbEnvironment !== environment.uuid || dbServer !== server.uuid) throw new Error('mkety-postgres is not in the selected Mkety Core production environment/server; no app was created.');
           const apps = await request('/applications');
