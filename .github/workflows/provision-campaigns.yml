@@ -120,7 +120,11 @@ jobs:
             if (repo.endsWith('/')) repo = repo.slice(0, -1);
             return repo;
           };
-          const matches = apps.filter(item => normalizeRepository(item.git_repository) === 'github.com/mketydigital/mkety-campaigns' && item.git_branch === 'main');
+          const matches = apps.filter(item =>
+            (normalizeRepository(item.git_repository) === 'github.com/mketydigital/mkety-campaigns' && item.git_branch === 'main') ||
+            item.name === 'mkety-campaigns' ||
+            String(item.domains || item.fqdn || '').includes('campaign.mkety.com')
+          );
           if (matches.length > 1) throw new Error('Multiple Campaigns production applications were found; refusing to choose one.');
           let app = matches[0];
           if (app) {
