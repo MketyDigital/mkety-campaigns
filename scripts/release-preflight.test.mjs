@@ -3,7 +3,8 @@ import test from "node:test";
 import { checkReleaseEnvironment } from "./release-preflight.mjs";
 
 const configured = {
-  DATABASE_URL: "postgres://user:hidden@postgres.internal:5432/mkety_campaigns",
+  DATABASE_URL: "postgres://user:hidden@postgres.internal:5432/mkety",
+  CAMPAIGNS_DB_SCHEMA: "campaigns",
   BETTER_AUTH_URL: "https://campaign.mkety.com",
   BETTER_AUTH_SECRET: "n9Fa7dq1HyH2pJ7s6eN0V3wX1L5Rk8Q4yT",
   MKETY_OPS_AUTH_ISSUER: "https://auth.mkety.com",
@@ -18,13 +19,14 @@ const configured = {
   EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT: "100",
 };
 
-test("release preflight accepts a dedicated database and all safety gates off", () => {
+test("release preflight accepts the shared mkety database with isolated tables and safety gates off", () => {
   assert.deepEqual(checkReleaseEnvironment(configured), []);
 });
 
-test("release preflight rejects shared or non-Postgres database targets", () => {
-  assert.match(checkReleaseEnvironment({ ...configured, DATABASE_URL: "postgres://admin:private@db.internal/other_app" }).join(" "), /dedicated mkety_campaigns/i);
-  assert.match(checkReleaseEnvironment({ ...configured, DATABASE_URL: "sqlite:///mkety_campaigns" }).join(" "), /PostgreSQL/i);
+test("release preflight rejects database or schema targets that are not isolated", () => {
+  assert.match(checkReleaseEnvironment({ ...configured, DATABASE_URL: "postgres://admin:private@db.internal/other_app" }).join(" "), /shared mkety database/i);
+  assert.match(checkReleaseEnvironment({ ...configured, CAMPAIGNS_DB_SCHEMA: "public" }).join(" "), /CAMPAIGNS_DB_SCHEMA/i);
+  assert.match(checkReleaseEnvironment({ ...configured, DATABASE_URL: "sqlite:///mkety" }).join(" "), /PostgreSQL/i);
 });
 
 test("release preflight enforces HTTPS origin and strong non-placeholder auth secrets", () => {
