@@ -76,7 +76,7 @@ test("PostgreSQL delivery events are idempotent and suppress the matched tenant"
 test("PostgreSQL ignores unknown messages and refuses ambiguous provider identifiers", {
   skip: !process.env.DATABASE_URL,
 }, async () => {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+  const pool = new Pool(getPostgresPoolOptions(process.env, 3));
   const tenantId = crypto.randomUUID();
   const campaignId = crypto.randomUUID();
   const contactIds = [crypto.randomUUID(), crypto.randomUUID()];
