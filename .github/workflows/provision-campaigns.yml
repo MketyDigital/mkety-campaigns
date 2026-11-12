@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/provision-campaigns.yml
+      - Dockerfile
   workflow_dispatch:
 
 permissions:
