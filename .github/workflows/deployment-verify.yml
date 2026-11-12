@@ -82,7 +82,8 @@ jobs:
             if (categories.length === 0 && /\b(?:Error:|ERR_[A-Z]+|fatal exception)\b/i.test(logs)) categories.push('runtime-startup-error');
             if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
             const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
-            const npmCodes = [...new Set([...logs.matchAll(/npm ERR! code (E[A-Z0-9]+)/gi)].map(match => match[1].toUpperCase()))];
+            const knownNpmCodes = new Set(['EAI_AGAIN','ECONNREFUSED','ECONNRESET','EEXIST','EINTEGRITY','EINVAL','EISDIR','ENOENT','ENOTFOUND','EACCES','EPERM','E401','E403','E404','ETIMEDOUT','ERESOLVE','EBADENGINE']);
+            const npmCodes = [...new Set([...logs.matchAll(/npm ERR! code ([A-Z0-9_]{3,16})/gi)].map(match => match[1].toUpperCase()).filter(code => knownNpmCodes.has(code)))];
             const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
