@@ -238,7 +238,7 @@ jobs:
           import pg from 'pg';
           const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:7000,max:1});
           try{
-            const result=await pool.query("SELECT current_database() AS database, has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema, EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') AS campaigns_schema_exists, CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') THEN has_schema_privilege(current_user,'campaigns','CREATE') ELSE has_database_privilege(current_user,current_database(),'CREATE') END AS can_migrate_campaigns");
+            const result=await pool.query("SELECT current_database() AS database, has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema, EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') AS campaigns_schema_exists, CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') THEN has_schema_privilege(current_user,'campaigns','USAGE') AND has_schema_privilege(current_user,'campaigns','CREATE') ELSE has_database_privilege(current_user,current_database(),'CREATE') END AS can_migrate_campaigns");
             const row=result.rows[0];
             console.log('MKETY PostgreSQL connection: successful');
             console.log('Campaigns schema readiness:',JSON.stringify({connectedToMketyDatabase:row.database==='mkety',schemaExists:row.campaigns_schema_exists===true,roleCanCreateSchema:row.can_create_schema===true,roleCanMigrateCampaigns:row.can_migrate_campaigns===true}));
