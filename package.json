@@ -3,16 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22.9"
-  },
+  "engines": { "node": ">=22.9" },
   "scripts": {
     "dev": "node --env-file-if-exists=.env --import tsx --watch src/node.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file-if-exists=.env dist/node.js",
     "start:production": "node scripts/migrate-postgres.mjs && node dist/node.js",
     "admin:bootstrap": "node --env-file-if-exists=.env scripts/bootstrap-ops.mjs",
-    "test": "node --import tsx --test src/app.test.ts src/auth.test.ts src/storage/object-store.test.ts src/email/providers.test.ts src/email/delivery-events.test.ts src/email/delivery-reconciliation.pg.test.ts src/email/test-send.test.ts src/sms/providers.test.ts src/domains/azure-arm.test.ts src/domains/oci-email.test.ts src/domains/service.test.ts src/domains/runtime.test.ts src/domains/senders.test.ts src/campaigns/service.test.ts src/campaigns/repository.test.ts src/campaigns/delivery.test.ts src/campaigns/delivery-repository.test.ts src/email/unsubscribe.test.ts src/worker.test.ts scripts/release-preflight.test.mjs scripts/postgres-pool-options.test.mjs",
+    "test": "node --import tsx --test src/app.test.ts src/auth.test.ts src/storage/object-store.test.ts src/email/providers.test.ts src/email/delivery-events.test.ts src/email/delivery-reconciliation.pg.test.ts src/email/test-send.test.ts src/sms/providers.test.ts src/domains/azure-arm.test.ts src/domains/oci-email.test.ts src/domains/service.test.ts src/domains/runtime.test.ts src/domains/senders.test.ts src/campaigns/service.test.ts src/campaigns/repository.test.ts src/campaigns/delivery.test.ts src/campaigns/delivery-repository.test.ts src/email/unsubscribe.test.ts src/worker.test.ts scripts/release-preflight.test.mjs scripts/postgres-pool-options.test.mjs scripts/postgres-schema.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "db:migrate:pg": "node --env-file-if-exists=.env scripts/migrate-postgres.mjs",
     "db:check-auth": "node --env-file-if-exists=.env scripts/check-auth-schema.mjs",
