@@ -60,7 +60,27 @@ jobs:
           console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: app.domains || app.fqdn, status: app.status, health_check_enabled: app.health_check_enabled }));
           const deployments = await get('/deployments/applications/' + app.uuid);
           const list = Array.isArray(deployments) ? deployments : (deployments.deployments || []);
-          console.log('Recent deployment states:', JSON.stringify(list.slice(0, 3).map(item => ({ status: item.status, created_at: item.created_at, deployment_uuid: item.deployment_uuid }))));
+          const recent = list.slice(0, 3).map(item => ({ status: item.status, created_at: item.created_at, deployment_uuid: item.deployment_uuid }));
+          console.log('Recent deployment states:', JSON.stringify(recent));
+          const failed = recent.find(item => item.status === 'failed' && item.deployment_uuid);
+          if (failed) {
+            const detail = await get('/deployments/' + failed.deployment_uuid);
+            const logs = String(detail.logs || '');
+            const categories = [];
+            if (/ECONNREFUSED|connection refused|could not connect|ETIMEDOUT|connect timeout/i.test(logs)) categories.push('database-or-service-connection');
+            if (/28P01|password authentication failed|database authentication failed/i.test(logs)) categories.push('database-authentication');
+            if (/3D000|database .{0,60} does not exist/i.test(logs)) categories.push('database-not-found');
+            if (/42501|permission denied|insufficient privilege|must be owner/i.test(logs)) categories.push('database-permissions');
+            if (/migration|migrat(e|ion)|schema/i.test(logs)) categories.push('migration-or-schema');
+            if (/BETTER_AUTH|ZITADEL|OIDC|issuer|origin/i.test(logs)) categories.push('authentication-configuration');
+            if (/npm ci|npm run build|Dockerfile|build failed/i.test(logs)) categories.push('image-build');
+            if (/health.?check|readyz|EADDRINUSE|listen/i.test(logs)) categories.push('health-or-port');
+            if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
+            const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
+            console.log('Deployment diagnostic categories:', JSON.stringify(categories));
+            if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
+            else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
+          }
           NODE
 
       - name: Resolve manual DNS target through read-only OCI compute inventory
