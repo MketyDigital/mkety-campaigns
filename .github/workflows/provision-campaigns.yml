@@ -102,7 +102,15 @@ jobs:
           if (!dbEnvironment || !dbServer) throw new Error('Could not verify the shared PostgreSQL placement from Coolify metadata; no app was created.');
           if (dbEnvironment !== environment.uuid || dbServer !== server.uuid) throw new Error('mkety-postgres is not in the selected Mkety Core production environment/server; no app was created.');
           const apps = await request('/applications');
-          const normalizeRepository = value => String(value || '').toLowerCase().replace(/^git@github\\.com:/, 'github.com/').replace(/^https?:\\/\\//, '').replace(/\\.git$/, '').replace(/\\/$/, '');
+          const normalizeRepository = value => {
+            let repo = String(value || '').toLowerCase();
+            if (repo.startsWith('git@github.com:')) repo = 'github.com/' + repo.slice('git@github.com:'.length);
+            if (repo.startsWith('https://')) repo = repo.slice('https://'.length);
+            if (repo.startsWith('http://')) repo = repo.slice('http://'.length);
+            if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+            if (repo.endsWith('/')) repo = repo.slice(0, -1);
+            return repo;
+          };
           const matches = apps.filter(item => normalizeRepository(item.git_repository) === 'github.com/mketydigital/mkety-campaigns' && item.git_branch === 'main');
           if (matches.length > 1) throw new Error('Multiple Campaigns production applications were found; refusing to choose one.');
           let app = matches[0];
