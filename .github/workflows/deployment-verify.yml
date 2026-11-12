@@ -17,12 +17,6 @@ jobs:
     env:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
-      DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
-      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
-      ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
-      AZURE_ARM_CLIENT_SECRET: ${{ secrets.AZURE_ARM_CLIENT_SECRET }}
-      OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.MKETY_CF_R2_TOKEN }}
       OCI_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
       OCI_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
       OCI_FINGERPRINT: ${{ secrets.OCI_EMAIL_FINGERPRINT }}
@@ -71,10 +65,21 @@ jobs:
           const failed = recent.find(item => item.status === 'failed' && item.deployment_uuid);
           if (failed) {
             const detail = await get('/deployments/' + failed.deployment_uuid);
-            let logs = String(detail.logs || '');
-            for (const key of ['DATABASE_URL','BETTER_AUTH_SECRET','ACS_EMAIL_CONNECTION_STRING','AZURE_ARM_CLIENT_SECRET','OCI_EMAIL_PRIVATE_KEY','R2_SECRET_ACCESS_KEY']) {
-              const secret = process.env[key];
-              if (secret) logs = logs.split(secret).join('[redacted]');
+            const logs = String(detail.logs || '');
+            const categories = [];
+            if (/ECONNREFUSED|connection refused|could not connect|ETIMEDOUT|connect timeout/i.test(logs)) categories.push('database-or-service-connection');
+            if (/28P01|password authentication failed|database authentication failed/i.test(logs)) categories.push('database-authentication');
+            if (/3D000|database .{0,60} does not exist/i.test(logs)) categories.push('database-not-found');
+            if (/42501|permission denied|insufficient privilege|must be owner/i.test(logs)) categories.push('database-permissions');
+            if (/migration|migrat(e|ion)|schema/i.test(logs)) categories.push('migration-or-schema');
+            if (/BETTER_AUTH|ZITADEL|OIDC|issuer|origin/i.test(logs)) categories.push('authentication-configuration');
+            if (/npm ci|npm run build|Dockerfile|build failed/i.test(logs)) categories.push('image-build');
+            if (/health.?check|readyz|EADDRINUSE|listen/i.test(logs)) categories.push('health-or-port');
+            if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
+            const sqlstates = [...new Set([...logs.matchAll(/\\bSQLSTATE\\s*[:=]?\\s*([0-9A-Z]{5})\\b/g)].map(match => match[1]))];
+            console.log('Deployment diagnostic categories:', JSON.stringify(categories));
+            if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
+            else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
             }
             logs = logs.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://[redacted]')
               .replace(/(password|secret|token|private[_ -]?key)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]');
