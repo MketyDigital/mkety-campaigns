@@ -13,7 +13,11 @@ const pool = new Pool(getPostgresPoolOptions(process.env, 1));
 
 try {
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-  await pool.query(`SET search_path TO "${schema}", public`);
+  await pool.query(`SET search_path TO "${schema}"`);
+  const schemaCheck = await pool.query("SELECT current_schema() AS schema");
+  if (schemaCheck.rows[0]?.schema !== schema) {
+    throw new Error("Campaigns database role must have USAGE and CREATE access to CAMPAIGNS_DB_SCHEMA");
+  }
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
