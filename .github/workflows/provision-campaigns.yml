@@ -60,7 +60,11 @@ jobs:
           node --input-type=module <<'NODE'
           import { randomBytes } from 'node:crypto';
 
-          const base = (process.env.COOLIFY_URL || '').replace(/\/+$/, '');
+          const rawBase = (process.env.COOLIFY_URL || '').trim();
+          if (rawBase.startsWith('http://')) throw new Error('Coolify must use HTTPS.');
+          let base = rawBase.startsWith('https://') ? rawBase : 'https://' + (rawBase.startsWith('//') ? rawBase.slice(2) : rawBase);
+          while (base.endsWith('/')) base = base.slice(0, -1);
+          if (!base.startsWith('https://')) throw new Error('Coolify must use HTTPS.');
           if (!base.startsWith('https://')) throw new Error('Coolify must use HTTPS.');
           const api = base + '/api/v1';
           const token = process.env.COOLIFY_API_TOKEN || '';
