@@ -73,13 +73,21 @@ jobs:
             if (/42501|permission denied.{0,80}schema|insufficient privilege/i.test(logs)) categories.push('database-permissions');
             if (/migration.{0,100}(failed|error|exception)|(?:failed|error|exception).{0,100}migration/i.test(logs)) categories.push('migration-failure');
             if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(logs)) categories.push('authentication-configuration-failure');
+            if (/failed to read Dockerfile|Dockerfile.{0,80}(not found|does not exist)|failed to send context/i.test(logs)) categories.push('dockerfile-or-build-context');
+            if (/out of memory|oom.?killed|exit code 137/i.test(logs)) categories.push('build-memory-limit');
+            if (/npm ERR! code E[A-Z0-9]+/i.test(logs)) categories.push('dependency-installation-failure');
+            if (/error TS\\d{4,5}/.test(logs)) categories.push('typescript-build-failure');
             if (/failed to solve|failed to build|npm ERR!|executor failed|error during (?:image )?build/i.test(logs)) categories.push('image-build-failure');
             if (/(health.?check|readyz).{0,100}(failed|unhealthy|timeout|error)|EADDRINUSE/i.test(logs)) categories.push('health-or-port-failure');
             if (categories.length === 0 && /\b(?:Error:|ERR_[A-Z]+|fatal exception)\b/i.test(logs)) categories.push('runtime-startup-error');
             if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
             const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
+            const npmCodes = [...new Set([...logs.matchAll(/npm ERR! code (E[A-Z0-9]+)/gi)].map(match => match[1].toUpperCase()))];
+            const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
+            if (npmCodes.length) console.log('npm error codes:', JSON.stringify(npmCodes));
+            if (typescriptCodes.length) console.log('TypeScript error codes:', JSON.stringify(typescriptCodes));
             else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
           }
           NODE
@@ -104,9 +112,10 @@ jobs:
                   "key_content": os.environ["OCI_PRIVATE_KEY"],
               }
               oci.signer.load_private_key(cfg["key_content"], None)
-              stage = "compute API"
+              stage = "compute-client-construction"
               compute = oci.core.ComputeClient(cfg)
               network = oci.core.VirtualNetworkClient(cfg)
+              stage = "instance-list-request"
               instances = oci.pagination.list_call_get_all_results(
                   compute.list_instances,
                   compartment_id=cfg["tenancy"],
@@ -114,7 +123,7 @@ jobs:
                   lifecycle_state="RUNNING",
               ).data
               addresses = []
-              stage = "VNIC lookup"
+              stage = "VNIC-attachment-list"
               for instance in instances:
                   attachments = oci.pagination.list_call_get_all_results(
                       compute.list_vnic_attachments,
@@ -124,6 +133,7 @@ jobs:
                   for attachment in attachments:
                       if not attachment.vnic_id:
                           continue
+                      stage = "VNIC-detail-request"
                       vnic = network.get_vnic(attachment.vnic_id).data
                       if vnic.public_ip:
                           addresses.append({"instance": instance.display_name, "public_ipv4": vnic.public_ip})
