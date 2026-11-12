@@ -140,14 +140,15 @@ jobs:
               const destination = await request('/destinations/' + appDestinationUuid);
               appServer = destination.server_uuid || destination.server?.uuid;
             }
+            // Coolify's app detail may omit project identifiers; this environment came from the project-scoped endpoint above.
+            const projectMatches = appProject === project.uuid || (!appProject && appEnvironment === environment.uuid);
             console.log('Campaigns placement verification:', JSON.stringify({
-              project: { resolved: Boolean(appProject), matches: appProject === project.uuid },
+              project: { resolved: Boolean(appProject) || appEnvironment === environment.uuid, matches: projectMatches },
               environment: { resolved: Boolean(appEnvironment), matches: appEnvironment === environment.uuid },
               server: { resolved: Boolean(appServer), matches: appServer === server.uuid },
-              destination: { present: Boolean(appDestinationUuid), resolved: Boolean(appServer) },
-              metadata_keys: Object.keys(detail).sort()
+              destination: { present: Boolean(appDestinationUuid), resolved: Boolean(appServer) }
             }));
-            if (appProject !== project.uuid || appEnvironment !== environment.uuid || appServer !== server.uuid) throw new Error('Existing Campaigns application placement could not be verified against Mkety Core production; no environment changes or deployment requested.');
+            if (!projectMatches || appEnvironment !== environment.uuid || appServer !== server.uuid) throw new Error('Existing Campaigns application placement could not be verified against Mkety Core production; no environment changes or deployment requested.');
           }
           if (!app) {
             app = await request('/applications/public', {
