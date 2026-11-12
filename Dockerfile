@@ -4,6 +4,7 @@ COPY package*.json ./
 RUN npm ci --include=dev
 COPY tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts
 RUN npm run build
 
 FROM node:22-alpine AS runtime
