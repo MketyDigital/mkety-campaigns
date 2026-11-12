@@ -51,7 +51,7 @@ jobs:
             if (repo.endsWith('/')) repo = repo.slice(0, -1);
             return repo;
           };
-          const matches = apps.filter(a => normalize(a.git_repository) === 'github.com/mketydigital/mkety-campaigns' && a.git_branch === 'main');
+          const matches = apps.filter(a => normalize(a.git_repository) === 'github.com/mketydigital/mkety-campaigns' && a.git_branch === 'main' || a.name === 'mkety-campaigns' || String(a.domains || a.fqdn || '').includes('campaign.mkety.com'));
           if (matches.length !== 1) {
             console.log('Campaigns Coolify app matches:', matches.length);
             process.exit(0);
@@ -71,8 +71,10 @@ jobs:
           python -m pip install --disable-pip-version-check --quiet oci
           python - <<'PY'
           import json, os
+          stage = "SDK import"
           try:
               import oci
+              stage = "signing key parse"
               cfg = {
                   "user": os.environ["OCI_USER_OCID"],
                   "fingerprint": os.environ["OCI_FINGERPRINT"],
@@ -80,6 +82,8 @@ jobs:
                   "region": os.environ["OCI_REGION"],
                   "key_content": os.environ["OCI_PRIVATE_KEY"],
               }
+              oci.signer.load_private_key(cfg["key_content"], None)
+              stage = "compute API"
               compute = oci.core.ComputeClient(cfg)
               network = oci.core.VirtualNetworkClient(cfg)
               instances = oci.pagination.list_call_get_all_results(
@@ -89,6 +93,7 @@ jobs:
                   lifecycle_state="RUNNING",
               ).data
               addresses = []
+              stage = "VNIC lookup"
               for instance in instances:
                   attachments = oci.pagination.list_call_get_all_results(
                       compute.list_vnic_attachments,
@@ -107,5 +112,5 @@ jobs:
                   print("OCI compute inventory returned no public IPv4 DNS candidates for running instances.")
           except Exception as exc:
               code = getattr(exc, "status", None) or getattr(exc, "code", None) or type(exc).__name__
-              print("OCI compute address lookup unavailable; permission/network/status:", str(code))
+              print("OCI compute address lookup unavailable at " + stage + "; permission/network/status:", str(code))
           PY
