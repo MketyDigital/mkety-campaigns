@@ -89,7 +89,7 @@ jobs:
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
             if (npmCodes.length) console.log('npm error codes:', JSON.stringify(npmCodes));
             if (typescriptCodes.length) console.log('TypeScript error codes:', JSON.stringify(typescriptCodes));
-            else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
+            if (categories.length === 0 && sqlstates.length === 0 && npmCodes.length === 0 && typescriptCodes.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
           }
           NODE
 
