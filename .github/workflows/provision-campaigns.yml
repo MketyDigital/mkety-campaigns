@@ -1,0 +1,221 @@
+name: Provision MKETY Campaigns on Coolify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/provision-campaigns.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mkety-campaigns-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
+      COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
+      BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
+      MKETY_OPS_AUTH_ISSUER: ${{ vars.MKETY_OPS_AUTH_ISSUER || 'https://mkety-dzb0ve.eu1.zitadel.cloud' }}
+      MKETY_OPS_AUTH_CLIENT_ID: ${{ secrets.MKETY_OPS_AUTH_CLIENT_ID }}
+      MKETY_OPS_ALLOWED_EMAIL: ${{ vars.MKETY_OPS_ALLOWED_EMAIL || secrets.MKETY_OPS_ALLOWED_EMAIL }}
+      ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
+      AZURE_ARM_TENANT_ID: ${{ secrets.AZURE_ARM_TENANT_ID }}
+      AZURE_ARM_CLIENT_ID: ${{ secrets.AZURE_ARM_CLIENT_ID }}
+      AZURE_ARM_CLIENT_SECRET: ${{ secrets.AZURE_ARM_CLIENT_SECRET }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      AZURE_EMAIL_SERVICE_NAME: ${{ secrets.AZURE_EMAIL_SERVICE_NAME }}
+      AZURE_COMMUNICATION_SERVICE_NAME: ${{ secrets.AZURE_COMMUNICATION_SERVICE_NAME }}
+      OCI_EMAIL_ENDPOINT: ${{ secrets.OCI_EMAIL_ENDPOINT }}
+      OCI_EMAIL_REGION: ${{ secrets.OCI_EMAIL_REGION }}
+      OCI_EMAIL_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
+      OCI_EMAIL_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
+      OCI_EMAIL_FINGERPRINT: ${{ secrets.OCI_EMAIL_FINGERPRINT }}
+      OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
+      OCI_EMAIL_COMPARTMENT_OCID: ${{ secrets.OCI_EMAIL_COMPARTMENT_OCID }}
+      R2_ACCOUNT_ID: ${{ secrets.MKETY_CF_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.MKETY_CF_R2_ACCESS }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.MKETY_CF_R2_TOKEN }}
+      R2_ENDPOINT: ${{ secrets.MKETY_CF_R2_ENDPOINT }}
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+      OCI_OBJECT_STORAGE_ENDPOINT: ${{ secrets.OCI_OBJECT_STORAGE_ENDPOINT }}
+      OCI_OBJECT_STORAGE_REGION: ${{ secrets.OCI_OBJECT_STORAGE_REGION }}
+      OCI_OBJECT_STORAGE_ACCESS_KEY_ID: ${{ secrets.OCI_OBJECT_STORAGE_ACCESS_KEY_ID }}
+      OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY }}
+      OCI_OBJECT_STORAGE_BUCKET: ${{ secrets.OCI_OBJECT_STORAGE_BUCKET }}
+    steps:
+      - name: Provision the production app and deploy with sends disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { randomBytes } from 'node:crypto';
+
+          const base = (process.env.COOLIFY_URL || '').replace(/\/+$/, '');
+          if (!base.startsWith('https://')) throw new Error('Coolify must use HTTPS.');
+          const api = base + '/api/v1';
+          const token = process.env.COOLIFY_API_TOKEN || '';
+          const required = ['COOLIFY_API_TOKEN','DATABASE_URL','MKETY_OPS_AUTH_CLIENT_ID','MKETY_OPS_ALLOWED_EMAIL','ACS_EMAIL_CONNECTION_STRING','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_ENDPOINT'];
+          for (const key of required) if (!process.env[key]) throw new Error('Required deployment setting is missing: ' + key);
+          const secret = (process.env.BETTER_AUTH_SECRET || '').trim();
+          let databaseUrl;
+          try { databaseUrl = new URL(process.env.DATABASE_URL); } catch { throw new Error('MKETY database URL is invalid; no resource was created.'); }
+          if (!['postgres:', 'postgresql:'].includes(databaseUrl.protocol) || decodeURIComponent(databaseUrl.pathname.slice(1)) !== 'mkety') throw new Error('MKETY_DATABASE_URL must target the shared mkety database; no resource was created.');
+          if (secret && secret.length < 32) throw new Error('Configured Better Auth secret is too short.');
+          const headers = { authorization: 'Bearer ' + token, accept: 'application/json', 'content-type': 'application/json' };
+          async function request(path, options = {}) {
+            const response = await fetch(api + path, { ...options, headers: { ...headers, ...(options.headers || {}) }, signal: AbortSignal.timeout(20000) });
+            const body = await response.text();
+            if (!response.ok) throw new Error('Coolify API request failed (' + response.status + ') at ' + path + '; response body suppressed.');
+            try { return body ? JSON.parse(body) : {}; } catch { throw new Error('Coolify API returned invalid JSON at ' + path); }
+          }
+          const projects = await request('/projects');
+          const project = projects.find(item => item.name === 'Mkety Core');
+          if (!project?.uuid) throw new Error('Expected the existing Mkety Core Coolify project; no resource was created.');
+          const envs = await request('/projects/' + project.uuid + '/environments');
+          const environment = envs.find(item => item.name === 'production');
+          if (!environment?.uuid) throw new Error('Expected Mkety Core production environment; no resource was created.');
+          const servers = await request('/servers');
+          if (servers.length !== 1 || !servers[0]?.uuid) throw new Error('Expected exactly one Coolify server; no resource was created.');
+          const server = servers[0];
+          const databases = await request('/databases');
+          const candidates = databases.filter(item => item.name === 'mkety-postgres');
+          if (candidates.length !== 1) throw new Error('Expected exactly one healthy mkety-postgres resource; no resource was created.');
+          const database = await request('/databases/' + candidates[0].uuid);
+          const approvedDbUrls = [database.internal_db_url, database.external_db_url].filter(Boolean).map(value => { try { return new URL(value); } catch { return null; } }).filter(Boolean);
+          const port = value => value.port || '5432';
+          const dbEndpointMatch = approvedDbUrls.some(value => value.hostname.toLowerCase() === databaseUrl.hostname.toLowerCase() && port(value) === port(databaseUrl) && decodeURIComponent(value.pathname.slice(1)) === 'mkety');
+          if (!dbEndpointMatch) throw new Error('MKETY_DATABASE_URL host/port does not match the verified mkety-postgres Coolify endpoint; no app was created.');
+          const dbEnvironment = database.environment_uuid || database.environment?.uuid || database.environmentUuid ||
+            (environment.id != null && String(database.environment_id) === String(environment.id) ? environment.uuid : null);
+          let dbServer = database.server_uuid || database.destination?.server_uuid || database.destination?.server?.uuid || database.server?.uuid;
+          const destinationUuid = database.destination?.uuid || database.destination_uuid || database.destination_id || (typeof database.destination === 'string' ? database.destination : null);
+          if (!dbServer && destinationUuid) {
+            const destination = await request('/destinations/' + destinationUuid);
+            dbServer = destination.server_uuid || destination.server?.uuid;
+          }
+          if (!dbEnvironment || !dbServer) throw new Error('Could not verify the shared PostgreSQL placement from Coolify metadata; no app was created.');
+          if (dbEnvironment !== environment.uuid || dbServer !== server.uuid) throw new Error('mkety-postgres is not in the selected Mkety Core production environment/server; no app was created.');
+          const apps = await request('/applications');
+          const normalizeRepository = value => {
+            let repo = String(value || '').toLowerCase();
+            if (repo.startsWith('git@github.com:')) repo = 'github.com/' + repo.slice('git@github.com:'.length);
+            if (repo.startsWith('https://')) repo = repo.slice('https://'.length);
+            if (repo.startsWith('http://')) repo = repo.slice('http://'.length);
+            if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+            if (repo.endsWith('/')) repo = repo.slice(0, -1);
+            return repo;
+          };
+          const matches = apps.filter(item => normalizeRepository(item.git_repository) === 'github.com/mketydigital/mkety-campaigns' && item.git_branch === 'main');
+          if (matches.length > 1) throw new Error('Multiple Campaigns production applications were found; refusing to choose one.');
+          let app = matches[0];
+          if (app) {
+            const detail = await request('/applications/' + app.uuid);
+            const appProject = detail.project_uuid || detail.project?.uuid;
+            const appEnvironment = detail.environment_uuid || detail.environment?.uuid;
+            const appServer = detail.server_uuid || detail.destination?.server_uuid || detail.server?.uuid;
+            if (appProject !== project.uuid || appEnvironment !== environment.uuid || appServer !== server.uuid) throw new Error('Existing Campaigns application placement could not be verified against Mkety Core production; no environment changes or deployment requested.');
+          }
+          if (!app) {
+            app = await request('/applications/public', {
+              method: 'POST',
+              body: JSON.stringify({
+                project_uuid: project.uuid,
+                environment_uuid: environment.uuid,
+                server_uuid: server.uuid,
+                git_repository: 'https://github.com/MketyDigital/mkety-campaigns',
+                git_branch: 'main',
+                build_pack: 'dockerfile',
+                dockerfile_location: '/Dockerfile',
+                ports_exposes: '3000',
+                name: 'mkety-campaigns',
+                domains: 'https://campaign.mkety.com',
+                health_check_enabled: true,
+                health_check_path: '/readyz',
+                health_check_port: '3000'
+              })
+            });
+            if (!app.uuid) throw new Error('Coolify did not return the new application UUID.');
+          }
+          const appUuid = app.uuid;
+          const current = await request('/applications/' + appUuid + '/envs');
+          const present = new Set(current.map(item => item.key));
+          const authSecret = secret || (present.has('BETTER_AUTH_SECRET') ? null : randomBytes(48).toString('base64url'));
+          if (!authSecret && !present.has('BETTER_AUTH_SECRET')) throw new Error('Could not create the customer auth secret.');
+          const values = {
+            NODE_ENV: 'production',
+            HOST: '0.0.0.0',
+            PORT: '3000',
+            DATABASE_URL: process.env.DATABASE_URL,
+            CAMPAIGNS_DB_SCHEMA: 'campaigns',
+            BETTER_AUTH_URL: 'https://campaign.mkety.com',
+            EMAIL_PROVIDER: 'acs-email',
+            EMAIL_TEST_SEND_ENABLED: 'false',
+            EMAIL_CAMPAIGN_SEND_ENABLED: 'false',
+            EMAIL_CAMPAIGN_MAX_RECIPIENTS: '100',
+            EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT: '1000',
+            EMAIL_PROVIDER_MIN_INTERVAL_MS: '1000',
+            SMS_ENABLED: 'false',
+            OCI_BACKUP_ENABLED: 'false',
+            R2_ACCOUNT_ID: process.env.R2_ACCOUNT_ID,
+            R2_ACCESS_KEY_ID: process.env.R2_ACCESS_KEY_ID,
+            R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
+            R2_ENDPOINT: process.env.R2_ENDPOINT,
+            R2_BUCKET: 'mkety-campaigns',
+            ACS_EMAIL_CONNECTION_STRING: process.env.ACS_EMAIL_CONNECTION_STRING,
+            AZURE_ARM_TENANT_ID: process.env.AZURE_ARM_TENANT_ID,
+            AZURE_ARM_CLIENT_ID: process.env.AZURE_ARM_CLIENT_ID,
+            AZURE_ARM_CLIENT_SECRET: process.env.AZURE_ARM_CLIENT_SECRET,
+            AZURE_SUBSCRIPTION_ID: process.env.AZURE_SUBSCRIPTION_ID,
+            AZURE_RESOURCE_GROUP: process.env.AZURE_RESOURCE_GROUP,
+            AZURE_EMAIL_SERVICE_NAME: process.env.AZURE_EMAIL_SERVICE_NAME,
+            AZURE_COMMUNICATION_SERVICE_NAME: process.env.AZURE_COMMUNICATION_SERVICE_NAME,
+            OCI_EMAIL_ENDPOINT: process.env.OCI_EMAIL_ENDPOINT,
+            OCI_EMAIL_REGION: process.env.OCI_EMAIL_REGION,
+            OCI_EMAIL_TENANCY_OCID: process.env.OCI_EMAIL_TENANCY_OCID,
+            OCI_EMAIL_USER_OCID: process.env.OCI_EMAIL_USER_OCID,
+            OCI_EMAIL_FINGERPRINT: process.env.OCI_EMAIL_FINGERPRINT,
+            OCI_EMAIL_PRIVATE_KEY: process.env.OCI_EMAIL_PRIVATE_KEY,
+            OCI_EMAIL_COMPARTMENT_OCID: process.env.OCI_EMAIL_COMPARTMENT_OCID,
+            AZURE_STORAGE_CONNECTION_STRING: process.env.AZURE_STORAGE_CONNECTION_STRING,
+            AZURE_STORAGE_CONTAINER: process.env.AZURE_STORAGE_CONTAINER,
+            OCI_OBJECT_STORAGE_ENDPOINT: process.env.OCI_OBJECT_STORAGE_ENDPOINT,
+            OCI_OBJECT_STORAGE_REGION: process.env.OCI_OBJECT_STORAGE_REGION,
+            OCI_OBJECT_STORAGE_ACCESS_KEY_ID: process.env.OCI_OBJECT_STORAGE_ACCESS_KEY_ID,
+            OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: process.env.OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY,
+            OCI_OBJECT_STORAGE_BUCKET: process.env.OCI_OBJECT_STORAGE_BUCKET,
+            MKETY_OPS_AUTH_ISSUER: process.env.MKETY_OPS_AUTH_ISSUER || 'https://mkety-dzb0ve.eu1.zitadel.cloud',
+            MKETY_OPS_AUTH_CLIENT_ID: process.env.MKETY_OPS_AUTH_CLIENT_ID,
+            MKETY_OPS_ALLOWED_EMAIL: process.env.MKETY_OPS_ALLOWED_EMAIL,
+            MKETY_OPS_AUTH_CALLBACK_URL: 'https://campaign.mkety.com/api/ops/auth/callback'
+          };
+          if (authSecret) values.BETTER_AUTH_SECRET = authSecret;
+          for (const [key, value] of Object.entries(values)) {
+            if (value == null || value === '') continue;
+            if (key === 'BETTER_AUTH_SECRET' && present.has(key) && !secret) continue;
+            const payload = {
+              key, value: String(value), is_literal: true, is_multiline: key === 'OCI_EMAIL_PRIVATE_KEY',
+              is_preview: false, is_runtime: true, is_buildtime: false,
+              ...(key === 'BETTER_AUTH_SECRET' || key.includes('SECRET') || key.includes('TOKEN') || key.includes('KEY') || key.includes('CONNECTION_STRING') || key === 'DATABASE_URL' ? { is_shown_once: true } : {})
+            };
+            await request('/applications/' + appUuid + '/envs', {
+              method: present.has(key) ? 'PATCH' : 'POST',
+              body: JSON.stringify(payload)
+            });
+          }
+          const deployment = await request('/deploy?uuid=' + encodeURIComponent(appUuid), { method: 'POST' });
+          console.log('Campaigns Coolify application configured:', appUuid);
+          console.log('Production project/environment/server verified; shared mkety-postgres placement matched.');
+          console.log('Configured schema: campaigns; customer auth secret: ' + (present.has('BETTER_AUTH_SECRET') ? 'preserved' : 'generated once and stored in Coolify'));
+          console.log('Campaign sends, test sends, SMS, and OCI backup are explicitly disabled.');
+          console.log('Deployment request queued:', Array.isArray(deployment.deployments) ? deployment.deployments.length : 0);
+          NODE
