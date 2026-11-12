@@ -91,10 +91,14 @@ jobs:
           const candidates = databases.filter(item => item.name === 'mkety-postgres');
           if (candidates.length !== 1) throw new Error('Expected exactly one healthy mkety-postgres resource; no resource was created.');
           const database = await request('/databases/' + candidates[0].uuid);
+          const approvedDbUrls = [database.internal_db_url, database.external_db_url].filter(Boolean).map(value => { try { return new URL(value); } catch { return null; } }).filter(Boolean);
+          const port = value => value.port || '5432';
+          const dbEndpointMatch = approvedDbUrls.some(value => value.hostname.toLowerCase() === databaseUrl.hostname.toLowerCase() && port(value) === port(databaseUrl) && decodeURIComponent(value.pathname.slice(1)) === 'mkety');
+          if (!dbEndpointMatch) throw new Error('MKETY_DATABASE_URL host/port does not match the verified mkety-postgres Coolify endpoint; no app was created.');
           const dbEnvironment = database.environment_uuid || database.environment?.uuid || database.environmentUuid ||
             (environment.id != null && String(database.environment_id) === String(environment.id) ? environment.uuid : null);
           let dbServer = database.server_uuid || database.destination?.server_uuid || database.destination?.server?.uuid || database.server?.uuid;
-          const destinationUuid = database.destination?.uuid || (typeof database.destination === 'string' ? database.destination : null);
+          const destinationUuid = database.destination?.uuid || database.destination_uuid || database.destination_id || (typeof database.destination === 'string' ? database.destination : null);
           if (!dbServer && destinationUuid) {
             const destination = await request('/destinations/' + destinationUuid);
             dbServer = destination.server_uuid || destination.server?.uuid;
