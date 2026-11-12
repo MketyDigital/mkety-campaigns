@@ -76,7 +76,7 @@ jobs:
             if (/npm ci|npm run build|Dockerfile|build failed/i.test(logs)) categories.push('image-build');
             if (/health.?check|readyz|EADDRINUSE|listen/i.test(logs)) categories.push('health-or-port');
             if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
-            const sqlstates = [...new Set([...logs.matchAll(/\\bSQLSTATE\\s*[:=]?\\s*([0-9A-Z]{5})\\b/g)].map(match => match[1]))];
+            const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
             else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
