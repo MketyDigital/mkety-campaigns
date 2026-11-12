@@ -61,11 +61,11 @@ jobs:
           import { randomBytes } from 'node:crypto';
 
           const rawBase = (process.env.COOLIFY_URL || '').trim();
-          if (rawBase.startsWith('http://')) throw new Error('Coolify must use HTTPS.');
-          let base = rawBase.startsWith('https://') ? rawBase : 'https://' + (rawBase.startsWith('//') ? rawBase.slice(2) : rawBase);
-          while (base.endsWith('/')) base = base.slice(0, -1);
-          if (!base.startsWith('https://')) throw new Error('Coolify must use HTTPS.');
-          if (!base.startsWith('https://')) throw new Error('Coolify must use HTTPS.');
+          let coolifyUrl;
+          try { coolifyUrl = new URL(rawBase.includes('://') ? rawBase : 'https://' + (rawBase.startsWith('//') ? rawBase.slice(2) : rawBase)); }
+          catch { throw new Error('Coolify URL is invalid; no token was sent.'); }
+          if (coolifyUrl.protocol !== 'https:' || coolifyUrl.username || coolifyUrl.password || coolifyUrl.search || coolifyUrl.hash || (coolifyUrl.pathname !== '/' && coolifyUrl.pathname !== '')) throw new Error('Coolify URL must be an HTTPS origin without credentials or a path.');
+          const base = coolifyUrl.origin;
           const api = base + '/api/v1';
           const token = process.env.COOLIFY_API_TOKEN || '';
           const required = ['COOLIFY_API_TOKEN','DATABASE_URL','MKETY_OPS_AUTH_CLIENT_ID','MKETY_OPS_ALLOWED_EMAIL','ACS_EMAIL_CONNECTION_STRING','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_ENDPOINT'];
