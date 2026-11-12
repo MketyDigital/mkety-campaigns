@@ -76,8 +76,8 @@ jobs:
               const secret = process.env[key];
               if (secret) logs = logs.split(secret).join('[redacted]');
             }
-            logs = logs.replace(/postgres(?:ql)?:\\/\\/[^\\s"'"`]+/gi, 'postgresql://[redacted]')
-              .replace(/(password|secret|token|private[_ -]?key)(\\s*[=:]\\s*)[^\\s,;]+/gi, '$1$2[redacted]');
+            logs = logs.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://[redacted]')
+              .replace(/(password|secret|token|private[_ -]?key)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]');
             const diagnosticLines = logs.split(/\\r?\\n/).filter(line => /error|failed|fatal|exception|refused|timeout|denied/i.test(line)).slice(-12);
             console.log('Sanitized deployment diagnostics:', diagnosticLines.length ? JSON.stringify(diagnosticLines.map(line => line.slice(0, 300))) : 'no matching error lines in Coolify deployment log');
           }
