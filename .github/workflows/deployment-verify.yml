@@ -80,11 +80,6 @@ jobs:
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
             else if (categories.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
-            }
-            logs = logs.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://[redacted]')
-              .replace(/(password|secret|token|private[_ -]?key)\s*[=:]\s*[^\s,;]+/gi, '$1=[redacted]');
-            const diagnosticLines = logs.split(/\\r?\\n/).filter(line => /error|failed|fatal|exception|refused|timeout|denied/i.test(line)).slice(-12);
-            console.log('Sanitized deployment diagnostics:', diagnosticLines.length ? JSON.stringify(diagnosticLines.map(line => line.slice(0, 300))) : 'no matching error lines in Coolify deployment log');
           }
           NODE
 
