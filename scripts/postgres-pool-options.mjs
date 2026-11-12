@@ -10,6 +10,6 @@ export function getPostgresPoolOptions(env, max) {
   return {
     connectionString: env.DATABASE_URL,
     max,
-    options: `-c search_path=${schema},public`,
+    options: `-c search_path=${schema}`,
   };
 }
