@@ -129,9 +129,17 @@ jobs:
           let app = matches[0];
           if (app) {
             const detail = await request('/applications/' + app.uuid);
-            const appProject = detail.project_uuid || detail.project?.uuid;
-            const appEnvironment = detail.environment_uuid || detail.environment?.uuid;
-            const appServer = detail.server_uuid || detail.destination?.server_uuid || detail.server?.uuid;
+            const appProject = detail.project_uuid || detail.project?.uuid ||
+              (project.id != null && String(detail.project_id) === String(project.id) ? project.uuid : null);
+            const appEnvironment = detail.environment_uuid || detail.environment?.uuid || detail.environmentUuid ||
+              (environment.id != null && String(detail.environment_id) === String(environment.id) ? environment.uuid : null);
+            let appServer = detail.server_uuid || detail.destination?.server_uuid || detail.destination?.server?.uuid || detail.server?.uuid;
+            const appDestinationUuid = detail.destination?.uuid || detail.destination_uuid || detail.destination_id ||
+              (typeof detail.destination === 'string' ? detail.destination : null);
+            if (!appServer && appDestinationUuid) {
+              const destination = await request('/destinations/' + appDestinationUuid);
+              appServer = destination.server_uuid || destination.server?.uuid;
+            }
             if (appProject !== project.uuid || appEnvironment !== environment.uuid || appServer !== server.uuid) throw new Error('Existing Campaigns application placement could not be verified against Mkety Core production; no environment changes or deployment requested.');
           }
           if (!app) {
