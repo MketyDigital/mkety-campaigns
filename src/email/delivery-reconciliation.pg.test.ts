@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Pool } from "pg";
+import { getPostgresPoolOptions } from "../../scripts/postgres-pool-options.mjs";
 import { PostgresEmailEventReconciler } from "./delivery-reconciliation.js";
 
 test("PostgreSQL delivery events are idempotent and suppress the matched tenant", {
   skip: !process.env.DATABASE_URL,
 }, async () => {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+  const pool = new Pool(getPostgresPoolOptions(process.env, 3));
   const tenantId = crypto.randomUUID();
   const campaignId = crypto.randomUUID();
   const contactId = crypto.randomUUID();
