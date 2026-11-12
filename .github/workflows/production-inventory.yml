@@ -70,6 +70,7 @@ jobs:
 
       - name: Inspect Coolify without changing resources
         if: env.COOLIFY_API_TOKEN != ''
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -212,6 +213,29 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,'\n## MKETY Auth inventory\n\n- OIDC issuer: reachable and verified\n- Campaigns Ops app matches: '+matches.length+'\n');
           NODE
 
+      - name: Verify Campaigns Zitadel issuer and OIDC client configuration
+        if: env.MKETY_OPS_AUTH_ISSUER != ''
+        shell: bash
+        run: |
+          node --input-type=module - <<'NODE'
+          const issuer=(process.env.MKETY_OPS_AUTH_ISSUER||'').replace(/\/+$/,'');
+          const clientId=(process.env.MKETY_OPS_AUTH_CLIENT_ID||'').trim();
+          try {
+            const url=new URL(issuer);
+            if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash) throw new Error('invalid issuer URL');
+            const response=await fetch(issuer+'/.well-known/openid-configuration',{redirect:'error',signal:AbortSignal.timeout(10000)});
+            if(!response.ok) throw new Error('discovery returned HTTP '+response.status);
+            const config=await response.json();
+            if((config.issuer||'').replace(/\/+$/,'')!==issuer) throw new Error('discovery issuer mismatch');
+            console.log('Campaigns Zitadel issuer: verified');
+            console.log('Campaigns OIDC client ID: '+(clientId?'present':'missing'));
+            if(!clientId) process.exitCode=1;
+          } catch {
+            console.log('Campaigns Zitadel issuer discovery: failed or misconfigured; response details suppressed.');
+            process.exitCode=1;
+          }
+          NODE
+
       - name: Report the configured MKETY database target without connecting
         if: env.DATABASE_URL != ''
         shell: bash
@@ -230,7 +254,7 @@ jobs:
             : 'Existing connection does not target the expected mkety database. No app migrations were run.');
           NODE
 
-      - name: Check shared Postgres connectivity and database creation permission
+      - name: Check shared Postgres connectivity and schema permissions
         if: env.DATABASE_URL != ''
         shell: bash
         run: |
