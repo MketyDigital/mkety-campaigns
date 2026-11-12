@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import pg from "pg";
 import { createAuth } from "../dist/auth.js";
+import { getPostgresPoolOptions } from "./postgres-pool-options.mjs";
 
 const { Pool } = pg;
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+const pool = new Pool(getPostgresPoolOptions(process.env, 2));
 const auth = createAuth(pool, {
   BETTER_AUTH_SECRET: "test-only-secret-please-replace-00000000000000000000000000000000",
   BETTER_AUTH_URL: "http://localhost:3000",
