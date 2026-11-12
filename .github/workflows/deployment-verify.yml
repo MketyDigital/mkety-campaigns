@@ -82,15 +82,16 @@ jobs:
               }
               compute = oci.core.ComputeClient(cfg)
               network = oci.core.VirtualNetworkClient(cfg)
-              instances = compute.list_instances(
+              instances = oci.pagination.list_call_get_all_results(
+                  compute.list_instances,
                   compartment_id=cfg["tenancy"],
                   compartment_id_in_subtree=True,
                   lifecycle_state="RUNNING",
-                  limit=100,
               ).data
               addresses = []
               for instance in instances:
-                  attachments = compute.list_vnic_attachments(
+                  attachments = oci.pagination.list_call_get_all_results(
+                      compute.list_vnic_attachments,
                       compartment_id=instance.compartment_id,
                       instance_id=instance.id,
                   ).data
@@ -101,9 +102,9 @@ jobs:
                       if vnic.public_ip:
                           addresses.append({"instance": instance.display_name, "public_ipv4": vnic.public_ip})
               if addresses:
-                  print("OCI running instance public IPv4 addresses:", json.dumps(addresses))
+                  print("OCI public IPv4 DNS candidates (confirm which instance is the Coolify host before adding DNS):", json.dumps(addresses))
               else:
-                  print("OCI compute inventory returned no public IPv4 addresses for running instances.")
+                  print("OCI compute inventory returned no public IPv4 DNS candidates for running instances.")
           except Exception as exc:
               code = getattr(exc, "status", None) or getattr(exc, "code", None) or type(exc).__name__
               print("OCI compute address lookup unavailable; permission/network/status:", str(code))
