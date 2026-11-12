@@ -1,0 +1,111 @@
+name: Verify MKETY Campaigns deployment and OCI address
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/deployment-verify.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
+      COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      OCI_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
+      OCI_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_EMAIL_FINGERPRINT }}
+      OCI_REGION: ${{ secrets.OCI_EMAIL_REGION }}
+      OCI_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
+    steps:
+      - name: Inspect Coolify application and latest deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const raw = (process.env.COOLIFY_URL || '').trim();
+          let origin;
+          try { origin = new URL(raw.includes('://') ? raw : 'https://' + (raw.startsWith('//') ? raw.slice(2) : raw)); }
+          catch { throw new Error('Coolify URL is invalid.'); }
+          if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || (origin.pathname !== '/' && origin.pathname !== '')) throw new Error('Coolify URL must be a safe HTTPS origin.');
+          const token = process.env.COOLIFY_API_TOKEN || '';
+          if (!token) throw new Error('Coolify API token is missing.');
+          const api = origin.origin + '/api/v1';
+          const get = async path => {
+            const response = await fetch(api + path, { headers: { authorization: 'Bearer ' + token, accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error('Coolify returned HTTP ' + response.status + ' for ' + path + '.');
+            return response.json();
+          };
+          const apps = await get('/applications');
+          const normalize = value => {
+            let repo = String(value || '').toLowerCase();
+            if (repo.startsWith('git@github.com:')) repo = 'github.com/' + repo.slice('git@github.com:'.length);
+            if (repo.startsWith('https://')) repo = repo.slice('https://'.length);
+            if (repo.startsWith('http://')) repo = repo.slice('http://'.length);
+            if (repo.endsWith('.git')) repo = repo.slice(0, -4);
+            if (repo.endsWith('/')) repo = repo.slice(0, -1);
+            return repo;
+          };
+          const matches = apps.filter(a => normalize(a.git_repository) === 'github.com/mketydigital/mkety-campaigns' && a.git_branch === 'main');
+          if (matches.length !== 1) {
+            console.log('Campaigns Coolify app matches:', matches.length);
+            process.exit(0);
+          }
+          const app = await get('/applications/' + matches[0].uuid);
+          console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: app.domains || app.fqdn, status: app.status, health_check_enabled: app.health_check_enabled }));
+          const deployments = await get('/deployments/applications/' + app.uuid);
+          const list = Array.isArray(deployments) ? deployments : (deployments.deployments || []);
+          console.log('Recent deployment states:', JSON.stringify(list.slice(0, 3).map(item => ({ status: item.status, created_at: item.created_at, deployment_uuid: item.deployment_uuid }))));
+          NODE
+
+      - name: Resolve manual DNS target through read-only OCI compute inventory
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet oci
+          python - <<'PY'
+          import json, os
+          try:
+              import oci
+              cfg = {
+                  "user": os.environ["OCI_USER_OCID"],
+                  "fingerprint": os.environ["OCI_FINGERPRINT"],
+                  "tenancy": os.environ["OCI_TENANCY_OCID"],
+                  "region": os.environ["OCI_REGION"],
+                  "key_content": os.environ["OCI_PRIVATE_KEY"],
+              }
+              compute = oci.core.ComputeClient(cfg)
+              network = oci.core.VirtualNetworkClient(cfg)
+              instances = oci.pagination.list_call_get_all_results(
+                  compute.list_instances,
+                  compartment_id=cfg["tenancy"],
+                  compartment_id_in_subtree=True,
+                  lifecycle_state="RUNNING",
+              ).data
+              addresses = []
+              for instance in instances:
+                  attachments = oci.pagination.list_call_get_all_results(
+                      compute.list_vnic_attachments,
+                      compartment_id=instance.compartment_id,
+                      instance_id=instance.id,
+                  ).data
+                  for attachment in attachments:
+                      if not attachment.vnic_id:
+                          continue
+                      vnic = network.get_vnic(attachment.vnic_id).data
+                      if vnic.public_ip:
+                          addresses.append({"instance": instance.display_name, "public_ipv4": vnic.public_ip})
+              if addresses:
+                  print("OCI public IPv4 DNS candidates (confirm which instance is the Coolify host before adding DNS):", json.dumps(addresses))
+              else:
+                  print("OCI compute inventory returned no public IPv4 DNS candidates for running instances.")
+          except Exception as exc:
+              code = getattr(exc, "status", None) or getattr(exc, "code", None) or type(exc).__name__
+              print("OCI compute address lookup unavailable; permission/network/status:", str(code))
+          PY
