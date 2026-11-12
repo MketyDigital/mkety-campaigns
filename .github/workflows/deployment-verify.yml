@@ -75,7 +75,7 @@ jobs:
             if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(logs)) categories.push('authentication-configuration-failure');
             if (/failed to solve|failed to build|npm ERR!|executor failed|error during (?:image )?build/i.test(logs)) categories.push('image-build-failure');
             if (/(health.?check|readyz).{0,100}(failed|unhealthy|timeout|error)|EADDRINUSE/i.test(logs)) categories.push('health-or-port-failure');
-            if (categories.length === 0 && /\\b(?:Error:|ERR_[A-Z]+|fatal exception)\\b/i.test(logs)) categories.push('runtime-startup-error');
+            if (categories.length === 0 && /\b(?:Error:|ERR_[A-Z]+|fatal exception)\b/i.test(logs)) categories.push('runtime-startup-error');
             if (categories.length === 0 && /error|failed|fatal|exception/i.test(logs)) categories.push('unclassified-deployment-error');
             const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
