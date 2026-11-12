@@ -26,6 +26,9 @@ jobs:
       ZITADEL_MANAGEMENT_PAT: ${{ secrets.ZITADEL_MANAGEMENT_PAT }}
       ZITADEL_PROJECT_ID: ${{ secrets.ZITADEL_PROJECT_ID }}
       DATABASE_URL: ${{ secrets.DATABASE_URL || secrets.MKETY_DATABASE_URL || secrets.CAMPAIGNS_DATABASE_URL || secrets.OCI_DATABASE_URL || secrets.POSTGRES_URL }}
+      CAMPAIGNS_DB_SCHEMA: campaigns
+      MKETY_OPS_AUTH_CLIENT_ID: ${{ secrets.MKETY_OPS_AUTH_CLIENT_ID }}
+      MKETY_OPS_AUTH_ISSUER: ${{ vars.MKETY_OPS_AUTH_ISSUER || 'https://mkety-dzb0ve.eu1.zitadel.cloud' }}
       BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
       ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
       OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
@@ -55,7 +58,7 @@ jobs:
           node - <<'NODE'
           const vars = [
             'COOLIFY_API_TOKEN','CLOUDFLARE_API_TOKEN','ZITADEL_URL','ZITADEL_MANAGEMENT_PAT',
-            'ZITADEL_PROJECT_ID','DATABASE_URL','BETTER_AUTH_SECRET',
+            'ZITADEL_PROJECT_ID','DATABASE_URL','CAMPAIGNS_DB_SCHEMA','BETTER_AUTH_SECRET','MKETY_OPS_AUTH_CLIENT_ID','MKETY_OPS_AUTH_ISSUER',
             'ACS_EMAIL_CONNECTION_STRING','OCI_EMAIL_PRIVATE_KEY','OCI_EMAIL_TENANCY_OCID',
             'R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_ENDPOINT','AZURE_STORAGE_CONNECTION_STRING','AZURE_STORAGE_CONTAINER',
             'OCI_OBJECT_STORAGE_ACCESS_KEY_ID','OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY'
@@ -222,9 +225,9 @@ jobs:
           }
           const database=decodeURIComponent(url.pathname.slice(1));
           console.log('Configured PostgreSQL database name:',database);
-          console.log(database==='mkety_campaigns'
-            ? 'Existing connection already targets the dedicated Campaigns database.'
-            : 'Existing connection targets the MKETY database. No app migrations were run; Campaigns must use a separate mkety_campaigns database on the same PostgreSQL service.');
+          console.log(database==='mkety'
+            ? 'Existing connection targets the shared mkety database; Campaigns production tables are configured for isolated schema campaigns.'
+            : 'Existing connection does not target the expected mkety database. No app migrations were run.');
           NODE
 
       - name: Check shared Postgres connectivity and database creation permission
@@ -235,10 +238,10 @@ jobs:
           import pg from 'pg';
           const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:7000,max:1});
           try{
-            const result=await pool.query("SELECT current_database() AS database, (SELECT rolcreatedb FROM pg_roles WHERE rolname=current_user) AS can_create_database, EXISTS (SELECT 1 FROM pg_database WHERE datname='mkety_campaigns') AS campaigns_database_exists");
+            const result=await pool.query("SELECT current_database() AS database, has_database_privilege(current_user,current_database(),'CREATE') AS can_create_schema, EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') AS campaigns_schema_exists, CASE WHEN EXISTS (SELECT 1 FROM pg_namespace WHERE nspname='campaigns') THEN has_schema_privilege(current_user,'campaigns','USAGE') AND has_schema_privilege(current_user,'campaigns','CREATE') ELSE has_database_privilege(current_user,current_database(),'CREATE') END AS can_migrate_campaigns");
             const row=result.rows[0];
             console.log('MKETY PostgreSQL connection: successful');
-            console.log('Campaigns DB provision readiness:',JSON.stringify({connectedToMketyDatabase:row.database==='mkety',canCreateDatabase:row.can_create_database===true,campaignsDatabaseExists:row.campaigns_database_exists===true}));
+            console.log('Campaigns schema readiness:',JSON.stringify({connectedToMketyDatabase:row.database==='mkety',schemaExists:row.campaigns_schema_exists===true,roleCanCreateSchema:row.can_create_schema===true,roleCanMigrateCampaigns:row.can_migrate_campaigns===true}));
           }catch(error){
             console.log('MKETY PostgreSQL connection: not reachable from the GitHub runner; SQLSTATE:',error?.code||'unavailable');
           }finally{

@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { Pool } from "pg";
+import { getPostgresPoolOptions } from "../scripts/postgres-pool-options.mjs";
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { PostgresDomainRepository } from "./domains/repository.js";
@@ -16,7 +17,8 @@ import { createEmailTestSender } from "./email/test-send.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
-const pool = process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL, max: 5 }) : undefined;
+const poolOptions = getPostgresPoolOptions(process.env, 5);
+const pool = poolOptions ? new Pool(poolOptions) : undefined;
 const auth = pool && process.env.BETTER_AUTH_SECRET && process.env.BETTER_AUTH_URL
   ? createAuth(pool, process.env)
   : undefined;

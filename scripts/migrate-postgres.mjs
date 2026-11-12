@@ -2,16 +2,22 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { getPostgresPoolOptions } from "./postgres-pool-options.mjs";
 
 const { Pool } = pg;
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) throw new Error("DATABASE_URL is required");
-
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+const schema = process.env.CAMPAIGNS_DB_SCHEMA?.trim() || "campaigns";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const migrationsDir = path.join(root, "migrations", "postgres");
-const pool = new Pool({ connectionString, max: 1 });
+const pool = new Pool(getPostgresPoolOptions(process.env, 1));
 
 try {
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+  await pool.query(`SET search_path TO "${schema}"`);
+  const schemaCheck = await pool.query("SELECT current_schema() AS schema");
+  if (schemaCheck.rows[0]?.schema !== schema) {
+    throw new Error("Campaigns database role must have USAGE and CREATE access to CAMPAIGNS_DB_SCHEMA");
+  }
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
