@@ -71,9 +71,11 @@ jobs:
             const challengeMode = /dnschallenge/i.test(configuration) ? 'dns' : /httpchallenge/i.test(configuration) ? 'http' : 'unknown';
             const addressKind = (await import('node:net')).isIP(server.ip || '') === 4 ? 'ipv4' : (await import('node:net')).isIP(server.ip || '') === 6 ? 'ipv6' : 'hostname';
             console.log('Coolify origin proxy:', JSON.stringify({ proxy_type: ['TRAEFIK','CADDY'].includes(proxy.proxy_type) ? proxy.proxy_type : 'unknown', proxy_status: ['running','stopped','starting','error'].includes(proxy.status) ? proxy.status : 'unknown', resolver_configured: Boolean(proxy.traefik_certificate_resolver), challenge_mode: challengeMode, address_kind: addressKind }));
-            const integrationTokens = await get('/security/integration-tokens');
-            const cloudflareTokens = integrationTokens.filter(item => item.provider === 'cloudflare');
-            console.log('Coolify Cloudflare DNS integration:', JSON.stringify({ configured: cloudflareTokens.length > 0, integrations: cloudflareTokens.map(item => ({ dns_capability: Array.isArray(item.capabilities) && item.capabilities.includes('dns'), dns_zones_count: Number.isInteger(item.dns_zones_count) ? item.dns_zones_count : null, automatic_dns: item.automatic_dns === true })) }));
+            try {
+              const integrationTokens = await get('/security/integration-tokens');
+              const cloudflareTokens = integrationTokens.filter(item => item.provider === 'cloudflare');
+              console.log('Coolify Cloudflare DNS integration:', JSON.stringify({ configured: cloudflareTokens.length > 0, integrations: cloudflareTokens.map(item => ({ dns_capability: Array.isArray(item.capabilities) && item.capabilities.includes('dns'), dns_zones_count: Number.isInteger(item.dns_zones_count) ? item.dns_zones_count : null, automatic_dns: item.automatic_dns === true })) }));
+            } catch { console.log('Coolify Cloudflare DNS integration: unavailable'); }
             if (server.ip) {
               const tls = await import('node:tls');
               const result = await new Promise(resolve => {
