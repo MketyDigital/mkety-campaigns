@@ -76,7 +76,10 @@ jobs:
                   resolve({ authorized: socket.authorized, authorization_error: socket.authorizationError || '', subject_cn: cert.subject?.CN || '', issuer_cn: cert.issuer?.CN || '', valid_from: cert.valid_from || '', valid_to: cert.valid_to || '', san_matches_campaign: String(cert.subjectaltname || '').includes('campaign.mkety.com') });
                   socket.destroy();
                 });
-                socket.on('error', error => resolve({ connection_error: ['ECONNREFUSED','ECONNRESET','ETIMEDOUT','EHOSTUNREACH'].includes(error.code) ? error.code : 'unclassified' }));
+                socket.on('error', error => {
+                  const code = String(error.code || error.name || 'unknown');
+                  resolve({ connection_error: /^[A-Z0-9_]{1,40}$/.test(code) ? code : 'unclassified' });
+                });
                 socket.on('timeout', () => { socket.destroy(); resolve({ connection_error: 'ETIMEDOUT' }); });
               });
               console.log('Direct Coolify origin TLS certificate:', JSON.stringify(result));
