@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   inspect:
@@ -19,6 +20,7 @@ jobs:
     env:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
       OCI_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
       OCI_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
       OCI_FINGERPRINT: ${{ secrets.OCI_EMAIL_FINGERPRINT }}
@@ -78,6 +80,19 @@ jobs:
                 socket.on('timeout', () => { socket.destroy(); resolve({ connection_error: 'ETIMEDOUT' }); });
               });
               console.log('Direct Coolify origin TLS certificate:', JSON.stringify(result));
+              const valid = result.authorized === true && result.san_matches_campaign === true;
+              const safeIssuer = String(result.issuer_cn || 'unknown').replace(/[^A-Za-z0-9 ._-]/g, '').slice(0, 28);
+              const description = result.connection_error
+                ? 'origin TLS probe unavailable: ' + result.connection_error
+                : 'origin TLS ' + (valid ? 'valid' : 'invalid') + '; hostname=' + (result.san_matches_campaign ? 'match' : 'mismatch') + '; issuer=' + safeIssuer;
+              try {
+                const statusResponse = await fetch('https://api.github.com/repos/MketyDigital/mkety-campaigns/statuses/' + process.env.GITHUB_SHA, {
+                  method: 'POST',
+                  headers: { authorization: 'Bearer ' + process.env.GITHUB_TOKEN, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'x-github-api-version': '2022-11-28' },
+                  body: JSON.stringify({ state: valid ? 'success' : 'failure', context: 'campaign-origin-tls', description: description.slice(0, 140), target_url: process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID })
+                });
+                console.log('Origin TLS status publication:', statusResponse.ok ? 'published' : 'unavailable HTTP ' + statusResponse.status);
+              } catch { console.log('Origin TLS status publication: unavailable'); }
             } else console.log('Direct Coolify origin TLS probe unavailable: server IP metadata missing.');
           } else console.log('Direct Coolify origin TLS probe unavailable: server count was not one.');
           // Public, read-only probes distinguish DNS/TLS/listener failures from a database readiness failure.
