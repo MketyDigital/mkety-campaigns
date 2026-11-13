@@ -29,7 +29,7 @@ The current owner-approved database target is the existing `mkety` logical datab
 
 ## P0 gates before a live campaign
 
-- [ ] Provision or identify exactly one Coolify application for this repository on main; verify its build and runtime settings.
+- [ ] Confirm exactly one Coolify app targets this repository's `main` branch and verify its Docker build settings and deployed commit.
 - [ ] Verify the app targets the existing `mkety` logical database on `mkety-postgres` with `CAMPAIGNS_DB_SCHEMA=campaigns`; review the migration ledger and schema isolation before relying on production data.
 - [ ] Configure runtime secrets in Coolify, bootstrap the first Ops account, verify MFA, and confirm the send/test/SMS gates are explicitly off.
 - [ ] Confirm the post-fix Coolify deployment is healthy and record its deployed commit SHA. Then verify DNS/TLS for `campaign.mkety.com`, `/healthz`, `/readyz`, Ops OIDC/MFA, tenant isolation, migrations, and worker behavior.
