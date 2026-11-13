@@ -66,8 +66,11 @@ jobs:
           const servers = await get('/servers');
           if (servers.length === 1 && servers[0]?.uuid) {
             const server = await get('/servers/' + servers[0].uuid);
-            const resolver = server.settings?.traefik_certificate_resolver || '';
-            console.log('Coolify origin proxy:', JSON.stringify({ proxy_type: server.proxy_type || 'unknown', resolver_configured: Boolean(resolver) }));
+            const proxy = await get('/servers/' + server.uuid + '/proxy');
+            const configuration = String(proxy.configuration || '');
+            const challengeMode = /dnschallenge/i.test(configuration) ? 'dns' : /httpchallenge/i.test(configuration) ? 'http' : 'unknown';
+            const addressKind = (await import('node:net')).isIP(server.ip || '') === 4 ? 'ipv4' : (await import('node:net')).isIP(server.ip || '') === 6 ? 'ipv6' : 'hostname';
+            console.log('Coolify origin proxy:', JSON.stringify({ proxy_type: ['TRAEFIK','CADDY'].includes(proxy.proxy_type) ? proxy.proxy_type : 'unknown', proxy_status: ['running','stopped','starting','error'].includes(proxy.status) ? proxy.status : 'unknown', resolver_configured: Boolean(proxy.traefik_certificate_resolver), challenge_mode: challengeMode, address_kind: addressKind }));
             if (server.ip) {
               const tls = await import('node:tls');
               const result = await new Promise(resolve => {
