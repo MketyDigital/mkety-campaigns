@@ -60,6 +60,23 @@ jobs:
           }
           const app = await get('/applications/' + matches[0].uuid);
           console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: app.domains || app.fqdn, status: app.status, health_check_enabled: app.health_check_enabled, build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha }));
+          // Public, read-only probes distinguish DNS/TLS/listener failures from a database readiness failure.
+          for (const path of ['/healthz', '/readyz']) {
+            try {
+              const response = await fetch('https://campaign.mkety.com' + path, {
+                redirect: 'error',
+                signal: AbortSignal.timeout(8000),
+                headers: { accept: 'application/json' },
+              });
+              const body = await response.json().catch(() => null);
+              const appStatus = body && ['ok', 'ready', 'not_ready'].includes(body.status) ? body.status : 'unrecognized';
+              console.log('Public health probe ' + path + ': HTTP ' + response.status + '; app_status=' + appStatus);
+            } catch (error) {
+              const code = error?.cause?.code || error?.code || '';
+              const allowed = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'UND_ERR_CONNECT_TIMEOUT']);
+              console.log('Public health probe ' + path + ' unavailable; network_or_tls=' + (allowed.has(code) ? code : 'unclassified'));
+            }
+          }
           const deployments = await get('/deployments/applications/' + app.uuid);
           const list = Array.isArray(deployments) ? deployments : (deployments.deployments || []);
           const recent = list.slice(0, 3).map(item => ({ status: item.status, created_at: item.created_at, deployment_uuid: item.deployment_uuid }));
