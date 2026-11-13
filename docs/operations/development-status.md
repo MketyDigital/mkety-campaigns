@@ -1,6 +1,6 @@
 # MKETY Campaigns: implementation status, roadmap, and pilot gates
 
-**Audit date:** 2026-11-11. **Status:** development / closed-pilot preparation; production deployment and live sending are not verified.
+**Audit date:** 2026-11-14. **Status:** closed-pilot preparation; the latest Coolify deployment failed its health check. DNS/TLS, deployed SHA, runtime readiness, and live sending remain unverified.
 
 This page describes code on main separately from live operational evidence. Passing CI or merging code proves neither successful deployment nor safe live delivery. The 2026-10-29 design and 2026-10-30 implementation plan remain historical intent.
 
@@ -13,26 +13,29 @@ This page describes code on main separately from live operational evidence. Pass
 | Providers and domains | ACS and OCI Email Delivery adapters; domain, DNS-verification and sender-readiness workflows. Real credentials, permissions, provider quotas and DNS ownership are unverified. |
 | Contacts and consent | Manual/CSV import, consent evidence, withdrawal, suppression and unsubscribe tokens. Tags, segments and export/retention workflows are incomplete. |
 | Campaigns | Draft, review, Ops approval, scheduling, explicit queue action and durable per-recipient jobs. Consent and suppression are checked before dispatch. Sending remains disabled unless explicitly enabled. |
-| Sending safeguards | Security headers, no-store on protected/auth pages, fail-closed HTTPS unsubscribe validation, per-campaign recipient caps, and an atomic per-tenant daily queue budget (default 1,000 queued recipients per UTC day). The daily budget is not a provider rate limiter or billing control. |
+| Sending safeguards | Security headers, no-store on protected/auth pages, fail-closed HTTPS unsubscribe validation, per-campaign recipient caps, a persisted email emergency stop checked before queue/worker dispatch, a database-backed per-provider minimum-interval throttle (`EMAIL_PROVIDER_MIN_INTERVAL_MS`, default 1 second; 250 ms–60 seconds), and an atomic per-tenant daily queue budget (default 1,000 queued recipients per UTC day). The interval and daily budget do not enforce vendor quotas, billing limits, or monitoring. |
 | Delivery events | Canonical ACS/OCI event contract, idempotent reconciliation and permanent bounce/complaint suppression. **No provider-authenticated public ingestion route or provider subscription verification exists.** Do not connect public requests directly to the reconciler. |
 | Storage and recovery | R2, Azure Blob and OCI object-storage adapters exist. No automated PostgreSQL backup and tested restore pipeline is established. |
 | SMS | Provider interface and Telnyx adapter exist; live SMS remains disabled and compliance/STOP handling is incomplete. |
-| Deployment | Coolify configuration and a domain workflow exist, but the live app, database, migrations, DNS/TLS and deployment SHA are unverified. |
+| Deployment | The production app was configured in the existing Mkety Core production environment on the shared `mkety-postgres` service, using the `campaigns` schema. The post-fix deployment failed its health check; campaign send, test-send, SMS, and OCI backup remain disabled. |
 
 ## Production evidence checked
 
-The latest observed main-branch CI runs after the safety and reconciliation merges completed successfully. CI covers typecheck, build, PostgreSQL migrations/auth schema and automated tests; it does not inspect Coolify runtime state or provider accounts.
+The latest `main` commit observed is `e9dc087` (2026-11-12). Its GitHub CI run passed typecheck, build, PostgreSQL migrations/auth-schema checks, and automated tests. The commit copies the imported `scripts` directory into the Docker build stage after earlier failed deployments reported `TS2307` build errors.
 
-The existing Coolify domain workflow was inspected through its latest recorded run. It returned 13 applications, found **zero** matching MketyDigital/mkety-campaigns on main, and exited before making changes. This is evidence that this workflow did not configure a deployment; it does not establish whether an app was created through another path. DNS/TLS, database ownership, deployed commit, runtime secrets, migration state, health and restore readiness remain unverified.
+The Coolify provisioning workflow verified the app's project, production environment, server, and existing `mkety-postgres` placement; configured `CAMPAIGNS_DB_SCHEMA=campaigns`; kept all send-related gates off; and queued one deployment. The initial verifier ran before that deployment request. A later read-only rerun confirmed the Nov 12 19:43:41 UTC deployment failed and Coolify reported `exited:unhealthy`. Its sanitized category was `health-or-port-failure`; the workflow does not expose the underlying log line, so the cause is not yet known. Earlier deployments reported `TS2307` build errors; the latest category is different. The OCI address lookup still did not return an IPv4 candidate.
+
+The current owner-approved database target is the existing `mkety` logical database on the `mkety-postgres` service, with Campaigns tables and migration history isolated in the `campaigns` schema. This supersedes the separate-database assumption in the historical design. Do not create a second PostgreSQL service or a `mkety_campaigns` logical database for production. DNS/TLS, deployed SHA, actual migration state, runtime health, Ops login, tenant isolation, worker behavior, provider readiness, and restore readiness remain unverified.
 
 ## P0 gates before a live campaign
 
-- [ ] Provision or identify exactly one Coolify application for this repository on main; verify its build and runtime settings.
-- [ ] Confirm the dedicated PostgreSQL database is mkety_campaigns; review and apply migrations through a controlled, rollback-aware release.
+- [ ] Confirm exactly one Coolify app targets this repository's `main` branch and verify its Docker build settings and deployed commit.
+- [ ] Verify the app targets the existing `mkety` logical database on `mkety-postgres` with `CAMPAIGNS_DB_SCHEMA=campaigns`; review the migration ledger and schema isolation before relying on production data.
 - [ ] Configure runtime secrets in Coolify, bootstrap the first Ops account, verify MFA, and confirm the send/test/SMS gates are explicitly off.
-- [ ] Verify DNS and TLS for campaign.mkety.com, then check /healthz, /readyz, authenticated access, tenant isolation and worker behavior on the deployed SHA.
-- [ ] Implement and test authenticated ACS and OCI event ingestion, payload normalization, replay defense and provider subscription verification before exposing any event endpoint.
-- [ ] Add a global emergency stop, provider-specific rate limits, monitoring and operator alerts. A polling interval and daily queue cap do not constrain provider sends per second.
+- [ ] Diagnose the `health-or-port-failure`, correct the startup/readiness issue, and deploy successfully. Record the deployed commit SHA, then verify `/healthz`, `/readyz`, Ops OIDC/MFA, tenant isolation, migrations, and worker behavior.
+- [ ] Add DNS only after the Coolify VM's public IP is confirmed. The verification workflow's OCI lookup used the email-delivery identity and did not return an address; do not broaden that identity's permissions to compute just to discover the IP.
+- [ ] Implement and test authenticated ACS and OCI event ingestion, payload normalization, replay defense, and provider subscription verification before exposing any event endpoint.
+- [ ] Verify in the deployed app that the persisted emergency stop is on by default and Ops pause prevents both queueing and worker dispatch. Add monitoring, operator alerts, and provider quota/burst limits validated against account limits; the current per-provider interval only paces this app's queue.
 - [ ] Configure encrypted PostgreSQL backups, retention and monitoring; restore one into an isolated database and record recovery evidence.
 - [ ] Verify provider credentials, sending quotas, owned SPF/DKIM/DMARC, approved sender identity and delivery/opt-out behavior.
 - [ ] Keep EMAIL_CAMPAIGN_SEND_ENABLED=false until all gates pass. A one-recipient pilot requires a separately approved operator action after deployment verification.
@@ -54,7 +57,7 @@ The existing Coolify domain workflow was inspected through its latest recorded r
 ## Release checklist
 
 1. Record the reviewed main SHA and successful CI result.
-2. Verify the Coolify application, dedicated database, runtime secrets, migration ledger, and HTTPS domain.
+2. Verify the Coolify application, shared `mkety` database target, `campaigns` schema, runtime secrets, migration ledger, and HTTPS domain.
 3. Confirm Ops MFA, tenant boundaries, worker state, send gates off, provider state and recovery evidence.
 4. Run deployed health/readiness and authenticated smoke checks.
 5. Only after all gates pass, separately approve a one-recipient test with a consented owned mailbox, verified sender, event reconciliation and unsubscribe verification; disable the send gate afterward.
