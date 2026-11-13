@@ -60,6 +60,26 @@ jobs:
           }
           const app = await get('/applications/' + matches[0].uuid);
           console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: app.domains || app.fqdn, status: app.status, health_check_enabled: app.health_check_enabled, build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha }));
+          // Read-only TLS diagnostic: connect to the Coolify server directly without exposing its address.
+          const servers = await get('/servers');
+          if (servers.length === 1 && servers[0]?.uuid) {
+            const server = await get('/servers/' + servers[0].uuid);
+            const resolver = server.settings?.traefik_certificate_resolver || '';
+            console.log('Coolify origin proxy:', JSON.stringify({ proxy_type: server.proxy_type || 'unknown', resolver_configured: Boolean(resolver) }));
+            if (server.ip) {
+              const tls = await import('node:tls');
+              const result = await new Promise(resolve => {
+                const socket = tls.connect({ host: server.ip, port: 443, servername: 'campaign.mkety.com', rejectUnauthorized: false, timeout: 8000 }, () => {
+                  const cert = socket.getPeerCertificate();
+                  resolve({ authorized: socket.authorized, authorization_error: socket.authorizationError || '', subject_cn: cert.subject?.CN || '', issuer_cn: cert.issuer?.CN || '', valid_from: cert.valid_from || '', valid_to: cert.valid_to || '', san_matches_campaign: String(cert.subjectaltname || '').includes('campaign.mkety.com') });
+                  socket.destroy();
+                });
+                socket.on('error', error => resolve({ connection_error: ['ECONNREFUSED','ECONNRESET','ETIMEDOUT','EHOSTUNREACH'].includes(error.code) ? error.code : 'unclassified' }));
+                socket.on('timeout', () => { socket.destroy(); resolve({ connection_error: 'ETIMEDOUT' }); });
+              });
+              console.log('Direct Coolify origin TLS certificate:', JSON.stringify(result));
+            } else console.log('Direct Coolify origin TLS probe unavailable: server IP metadata missing.');
+          } else console.log('Direct Coolify origin TLS probe unavailable: server count was not one.');
           // Public, read-only probes distinguish DNS/TLS/listener failures from a database readiness failure.
           for (const path of ['/healthz', '/readyz']) {
             try {
