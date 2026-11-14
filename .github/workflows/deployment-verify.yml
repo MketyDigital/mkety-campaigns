@@ -358,7 +358,19 @@ jobs:
             if (migrationFailures.length) {
               const diagnostic = migrationFailures[0];
               const targetSha = /^[0-9a-f]{40}$/i.test(String(detail.commit || '')) ? String(detail.commit) : '';
-              const description = ('Startup diagnostic: phase=' + diagnostic.phase + '; type=' + diagnostic.errorType + '; code=' + diagnostic.errorCode).slice(0, 140);
+              const phaseMatch = diagnosticLogs.match(/phase\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9 ._-]{1,120}?)(?=\\?["']?\s*[,}]|\s+(?:errorType|errorCode))/);
+              const phase = phaseMatch?.[1]?.trim() || 'unclassified';
+              let databaseTlsMode = 'unavailable';
+              try {
+                const databaseUrl = new URL(process.env.DATABASE_URL || '');
+                const sslmode = databaseUrl.searchParams.get('sslmode');
+                databaseTlsMode = sslmode && /^(disable|allow|prefer|require|verify-ca|verify-full)$/.test(sslmode)
+                  ? sslmode
+                  : databaseUrl.searchParams.get('ssl') === 'true' ? 'ssl=true'
+                  : databaseUrl.searchParams.has('sslrootcert') ? 'sslrootcert=present'
+                  : 'driver-default';
+              } catch {}
+              const description = ('Startup diagnostic: phase=' + phase + '; type=' + diagnostic.errorType + '; code=' + diagnostic.errorCode + '; db_tls=' + databaseTlsMode).slice(0, 140);
               if (targetSha) {
                 const statusResponse = await fetch('https://api.github.com/repos/MketyDigital/mkety-campaigns/statuses/' + targetSha, {
                   method: 'POST',
