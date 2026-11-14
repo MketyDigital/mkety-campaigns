@@ -210,7 +210,9 @@ jobs:
             const runtimeContentType = runtimeResponse.headers.get('content-type') || 'unknown';
             const runtimeBody = await runtimeResponse.text();
             if (!runtimeResponse.ok) {
-              console.log('Runtime log endpoint response:', JSON.stringify({ http_status: runtimeResponse.status, content_type: runtimeContentType, body_bytes: Buffer.byteLength(runtimeBody) }));
+              const errorText = runtimeBody.toLowerCase();
+              const errorCategory = /not running|no container|container.{0,40}(not found|missing|unavailable)/.test(errorText) ? 'container-unavailable' : /unauthori[sz]ed|permission|forbidden/.test(errorText) ? 'permission' : /invalid|parameter|query|validation/.test(errorText) ? 'request-validation' : 'other';
+              console.log('Runtime log endpoint response:', JSON.stringify({ http_status: runtimeResponse.status, content_type: runtimeContentType, body_bytes: Buffer.byteLength(runtimeBody), api_error_category: errorCategory }));
             } else {
               let runtimePayload;
               try { runtimePayload = JSON.parse(runtimeBody); }
