@@ -263,12 +263,23 @@ jobs:
             const sqlstates = [...new Set([...logs.matchAll(/\bSQLSTATE\s*[:=]?\s*([0-9A-Z]{5})\b/g)].map(match => match[1]))];
             const knownNpmCodes = new Set(['EAI_AGAIN','ECONNREFUSED','ECONNRESET','EEXIST','EINTEGRITY','EINVAL','EISDIR','ENOENT','ENOTFOUND','EACCES','EPERM','E401','E403','E404','ETIMEDOUT','ERESOLVE','EBADENGINE']);
             const npmCodes = [...new Set([...logs.matchAll(/npm (?:ERR!|error) code ([A-Z0-9_]{3,16})/gi)].map(match => match[1].toUpperCase()).filter(code => knownNpmCodes.has(code)))];
+            const migrationFailures = [...diagnosticLogs.matchAll(/Campaigns PostgreSQL migration failed:\\s*(\\{[^\\r\\n]{1,500}\\})/g)]
+              .flatMap(match => {
+                try {
+                  const value = JSON.parse(match[1]);
+                  const phase = typeof value.phase === 'string' && /^[A-Za-z0-9 ._-]{1,120}$/.test(value.phase) ? value.phase : 'unknown';
+                  const errorType = typeof value.errorType === 'string' && /^[A-Za-z0-9]{1,40}$/.test(value.errorType) ? value.errorType : 'unknown';
+                  const errorCode = typeof value.errorCode === 'string' && /^[A-Z0-9_]{2,32}$/.test(value.errorCode) ? value.errorCode : 'unclassified';
+                  return [{ phase, errorType, errorCode }];
+                } catch { return []; }
+              });
             const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
             const diagnosticLogs = logs.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u0000/g, '');
             const unresolvedImports = [...new Set([...diagnosticLogs.matchAll(/Cannot find module\s+(['"])([^'"]{1,180})\1/gi)].map(match => /^[A-Za-z0-9@._:/-]+$/.test(match[2]) ? match[2] : '[nonstandard module specifier]'))];
             const typescriptLocations = [...new Set([...diagnosticLogs.matchAll(/([A-Za-z0-9_./-]+\.tsx?)\((\d{1,6}),\d+\):\s*error TS2307/g)].map(match => match[1].split('/').pop() + ':' + match[2]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
+            if (migrationFailures.length) console.log('Sanitized Campaigns migration failure:', JSON.stringify(migrationFailures));
             if (npmCodes.length) console.log('npm error codes:', JSON.stringify(npmCodes));
             if (typescriptCodes.length) console.log('TypeScript error codes:', JSON.stringify(typescriptCodes));
             if (unresolvedImports.length) console.log('TypeScript unresolved module specifiers:', JSON.stringify(unresolvedImports));
