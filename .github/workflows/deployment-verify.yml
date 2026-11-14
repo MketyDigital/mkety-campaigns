@@ -67,6 +67,64 @@ jobs:
           const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
           const knownDatabase = databaseMatches.length === 1 ? await get('/databases/' + databaseMatches[0].uuid) : null;
           // Inspect only runtime variable names and safe connection metadata; never log variable values.
+          // Use the existing app DB credentials with Coolify's external endpoint for a read-only role/schema check.
+          const checkExternalDatabasePrivileges = async () => {
+            if (!knownDatabase?.external_db_url || !process.env.DATABASE_URL) {
+              console.log('PostgreSQL external-endpoint privilege check: unavailable');
+              return;
+            }
+            const { spawnSync } = await import('node:child_process');
+            const configuredUrl = (() => { try { return new URL(process.env.DATABASE_URL); } catch { return null; } })();
+            const externalUrl = (() => { try { return new URL(knownDatabase.external_db_url); } catch { return null; } })();
+            if (!configuredUrl || !externalUrl) {
+              console.log('PostgreSQL external-endpoint privilege check: invalid endpoint metadata');
+              return;
+            }
+            const query = "SELECT current_database() = 'mkety', EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'campaigns'), COALESCE((SELECT has_schema_privilege(current_user, oid, 'USAGE') FROM pg_namespace WHERE nspname = 'campaigns'), false), COALESCE((SELECT has_schema_privilege(current_user, oid, 'CREATE') FROM pg_namespace WHERE nspname = 'campaigns'), false), has_database_privilege(current_user, current_database(), 'CREATE');";
+            const result = spawnSync('psql', [
+              '--no-psqlrc', '--quiet', '--tuples-only', '--no-align',
+              '--field-separator=|', '--set=ON_ERROR_STOP=1', '--command', query
+            ], {
+              encoding: 'utf8',
+              timeout: 12000,
+              env: {
+                ...process.env,
+                PGHOST: externalUrl.hostname,
+                PGPORT: externalUrl.port || '5432',
+                PGUSER: decodeURIComponent(configuredUrl.username),
+                PGPASSWORD: decodeURIComponent(configuredUrl.password),
+                PGDATABASE: 'mkety',
+                PGSSLMODE: externalUrl.searchParams.get('sslmode') || 'prefer',
+                PGCONNECT_TIMEOUT: '8'
+              }
+            });
+            if (!result.error && result.status === 0) {
+              const match = String(result.stdout || '').trim().match(/^([tf])\|([tf])\|([tf])\|([tf])\|([tf])$/);
+              if (match) {
+                console.log('PostgreSQL external-endpoint privilege check:', JSON.stringify({
+                  database_is_mkety: match[1] === 't',
+                  campaigns_schema_exists: match[2] === 't',
+                  schema_usage: match[3] === 't',
+                  schema_create: match[4] === 't',
+                  database_create: match[5] === 't'
+                }));
+                return;
+              }
+              console.log('PostgreSQL external-endpoint privilege check: unrecognized result');
+              return;
+            }
+            const message = String(result.stderr || '').toLowerCase();
+            const code = result.error?.code || '';
+            const category = /password authentication failed|authentication failed/.test(message) ? 'authentication'
+              : /permission denied|must be owner|insufficient privilege/.test(message) ? 'database-permissions'
+              : /could not translate host|name or service not known|temporary failure in name resolution/.test(message) ? 'dns-resolution'
+              : /connection refused|connection timed out|timeout expired|no route to host|could not connect/.test(message) || code === 'ETIMEDOUT' ? 'network-connectivity'
+              : /database .* does not exist/.test(message) ? 'database-not-found'
+              : result.error ? (['ENOENT','EACCES','ETIMEDOUT'].includes(code) ? code : 'probe-error')
+              : 'other';
+            console.log('PostgreSQL external-endpoint privilege check: unavailable; failure_category=' + category);
+          };
+          await checkExternalDatabasePrivileges();
           const configuredEnvs = await get('/applications/' + app.uuid + '/envs');
           const runtimeEnvs = (Array.isArray(configuredEnvs) ? configuredEnvs : [])
             .filter(item => item && item.is_preview !== true && item.is_runtime !== false);
