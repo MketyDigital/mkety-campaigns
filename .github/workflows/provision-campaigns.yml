@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { randomBytes } from 'node:crypto';
+          import { createPrivateKey, randomBytes } from 'node:crypto';
 
           const rawBase = (process.env.COOLIFY_URL || '').trim();
           let coolifyUrl;
@@ -72,6 +72,31 @@ jobs:
           const token = process.env.COOLIFY_API_TOKEN || '';
           const required = ['COOLIFY_API_TOKEN','DATABASE_URL','MKETY_OPS_AUTH_CLIENT_ID','MKETY_OPS_ALLOWED_EMAIL','ACS_EMAIL_CONNECTION_STRING','R2_ACCOUNT_ID','R2_ACCESS_KEY_ID','R2_SECRET_ACCESS_KEY','R2_ENDPOINT'];
           for (const key of required) if (!process.env[key]) throw new Error('Required deployment setting is missing: ' + key);
+          const acsParts = new Map((process.env.ACS_EMAIL_CONNECTION_STRING || '').split(';').map(segment => {
+            const index = segment.indexOf('=');
+            return index > 0 ? [segment.slice(0, index).trim().toLowerCase(), segment.slice(index + 1).trim()] : ['', ''];
+          }).filter(([key]) => key));
+          let acsEndpoint;
+          try { acsEndpoint = new URL(acsParts.get('endpoint') || ''); }
+          catch { throw new Error('ACS email connection string is invalid; endpoint/access key details suppressed.'); }
+          if (acsEndpoint.protocol !== 'https:' || !acsParts.get('accesskey')) throw new Error('ACS email connection string is incomplete or does not use HTTPS; values suppressed.');
+          const ociEmailKeys = ['OCI_EMAIL_ENDPOINT', 'OCI_EMAIL_REGION', 'OCI_EMAIL_TENANCY_OCID', 'OCI_EMAIL_USER_OCID', 'OCI_EMAIL_FINGERPRINT', 'OCI_EMAIL_PRIVATE_KEY', 'OCI_EMAIL_COMPARTMENT_OCID'];
+          const azureDomainKeys = ['AZURE_ARM_TENANT_ID', 'AZURE_ARM_CLIENT_ID', 'AZURE_ARM_CLIENT_SECRET', 'AZURE_SUBSCRIPTION_ID', 'AZURE_RESOURCE_GROUP', 'AZURE_EMAIL_SERVICE_NAME', 'AZURE_COMMUNICATION_SERVICE_NAME'];
+          const presentCount = keys => keys.filter(key => Boolean(process.env[key]?.trim())).length;
+          for (const [name, keys] of [['OCI Email Delivery', ociEmailKeys], ['Azure domain management', azureDomainKeys]]) {
+            const count = presentCount(keys);
+            if (count > 0 && count !== keys.length) throw new Error(name + ' settings are only partially configured; refusing deployment.');
+          }
+          if (presentCount(ociEmailKeys) === ociEmailKeys.length) {
+            let ociEndpoint;
+            try { ociEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT || ''); }
+            catch { throw new Error('OCI Email Delivery endpoint is invalid; value suppressed.'); }
+            if (ociEndpoint.protocol !== 'https:') throw new Error('OCI Email Delivery endpoint must use HTTPS; value suppressed.');
+            try {
+              if (createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY).asymmetricKeyType !== 'rsa') throw new Error('wrong key type');
+            } catch { throw new Error('OCI Email Delivery private key is not an unencrypted RSA PEM key; value suppressed.'); }
+          }
+          console.log('Provider credential preflight passed; credential values are not logged.');
           const secret = (process.env.BETTER_AUTH_SECRET || '').trim();
           let databaseUrl;
           try { databaseUrl = new URL(process.env.DATABASE_URL); } catch { throw new Error('MKETY database URL is invalid; no resource was created.'); }
