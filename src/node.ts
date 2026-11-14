@@ -19,6 +19,30 @@ const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
 const poolOptions = getPostgresPoolOptions(process.env, 5);
 const pool = poolOptions ? new Pool(poolOptions) : undefined;
+let databaseConnectionErrorLogged = false;
+const knownDatabaseErrorCodes = new Set(["ECONNREFUSED","ECONNRESET","ETIMEDOUT","ENOTFOUND","EAI_AGAIN","EHOSTUNREACH","EADDRNOTAVAIL","EPIPE","UNABLE_TO_VERIFY_LEAF_SIGNATURE","SELF_SIGNED_CERT_IN_CHAIN","DEPTH_ZERO_SELF_SIGNED_CERT","CERT_HAS_EXPIRED","ERR_TLS_CERT_ALTNAME_INVALID","28P01","3D000","42501"]);
+const logDatabaseConnectionFailure = (error: unknown) => {
+  if (databaseConnectionErrorLogged) return;
+  databaseConnectionErrorLogged = true;
+  const detail = error && typeof error === "object" ? error as { name?: unknown; code?: unknown } : {};
+  const errorType = typeof detail.name === "string" && /^[A-Za-z0-9]{1,40}$/.test(detail.name) ? detail.name : "unclassified";
+  const errorCode = typeof detail.code === "string" && knownDatabaseErrorCodes.has(detail.code) ? detail.code : "unclassified";
+  console.error("Campaigns database connection failed:", JSON.stringify({ errorType, errorCode }));
+};
+if (pool) {
+  let connected = false;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await pool.query("SELECT 1");
+      connected = true;
+      break;
+    } catch (error) {
+      logDatabaseConnectionFailure(error);
+      if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
+  if (!connected) throw new Error("Campaigns PostgreSQL startup preflight failed after bounded retries.");
+}
 const auth = pool && process.env.BETTER_AUTH_SECRET && process.env.BETTER_AUTH_URL
   ? createAuth(pool, process.env)
   : undefined;
@@ -54,21 +78,13 @@ const operations = pool && process.env.BETTER_AUTH_URL
   ? new PostgresOperationsService(pool, process.env.BETTER_AUTH_URL)
   : undefined;
 const operatorAuth = pool ? createOperatorAuth(pool, process.env) : undefined;
-let databaseReadinessErrorLogged = false;
 const app = createApp(async () => {
   if (!pool) return false;
   try {
     await pool.query("SELECT 1");
     return true;
   } catch (error) {
-    if (!databaseReadinessErrorLogged) {
-      databaseReadinessErrorLogged = true;
-      const detail = error && typeof error === "object" ? error as { name?: unknown; code?: unknown } : {};
-      const errorType = typeof detail.name === "string" && /^[A-Za-z0-9]{1,40}$/.test(detail.name) ? detail.name : "unclassified";
-      const knownCodes = new Set(["ECONNREFUSED","ECONNRESET","ETIMEDOUT","ENOTFOUND","EAI_AGAIN","EHOSTUNREACH","EADDRNOTAVAIL","EPIPE","UNABLE_TO_VERIFY_LEAF_SIGNATURE","SELF_SIGNED_CERT_IN_CHAIN","DEPTH_ZERO_SELF_SIGNED_CERT","CERT_HAS_EXPIRED","ERR_TLS_CERT_ALTNAME_INVALID","28P01","3D000","42501"]);
-      const errorCode = typeof detail.code === "string" && knownCodes.has(detail.code) ? detail.code : "unclassified";
-      console.error("Campaigns database readiness check failed:", JSON.stringify({ errorType, errorCode }));
-    }
+    logDatabaseConnectionFailure(error);
     return false;
   }
 }, auth && pool ? {

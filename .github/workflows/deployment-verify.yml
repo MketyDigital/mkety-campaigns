@@ -7,6 +7,12 @@ on:
       - .github/workflows/deployment-verify.yml
       - .github/workflows/provision-campaigns.yml
       - Dockerfile
+      - src/**
+      - scripts/**
+      - migrations/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
   workflow_dispatch:
 
 permissions:
