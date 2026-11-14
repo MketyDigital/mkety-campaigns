@@ -54,12 +54,21 @@ const operations = pool && process.env.BETTER_AUTH_URL
   ? new PostgresOperationsService(pool, process.env.BETTER_AUTH_URL)
   : undefined;
 const operatorAuth = pool ? createOperatorAuth(pool, process.env) : undefined;
+let databaseReadinessErrorLogged = false;
 const app = createApp(async () => {
   if (!pool) return false;
   try {
     await pool.query("SELECT 1");
     return true;
-  } catch {
+  } catch (error) {
+    if (!databaseReadinessErrorLogged) {
+      databaseReadinessErrorLogged = true;
+      const detail = error && typeof error === "object" ? error as { name?: unknown; code?: unknown } : {};
+      const errorType = typeof detail.name === "string" && /^[A-Za-z0-9]{1,40}$/.test(detail.name) ? detail.name : "unclassified";
+      const knownCodes = new Set(["ECONNREFUSED","ECONNRESET","ETIMEDOUT","ENOTFOUND","EAI_AGAIN","EHOSTUNREACH","EADDRNOTAVAIL","EPIPE","UNABLE_TO_VERIFY_LEAF_SIGNATURE","SELF_SIGNED_CERT_IN_CHAIN","DEPTH_ZERO_SELF_SIGNED_CERT","CERT_HAS_EXPIRED","ERR_TLS_CERT_ALTNAME_INVALID","28P01","3D000","42501"]);
+      const errorCode = typeof detail.code === "string" && knownCodes.has(detail.code) ? detail.code : "unclassified";
+      console.error("Campaigns database readiness check failed:", JSON.stringify({ errorType, errorCode }));
+    }
     return false;
   }
 }, auth && pool ? {
