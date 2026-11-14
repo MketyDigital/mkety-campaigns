@@ -65,8 +65,45 @@ jobs:
           const app = await get('/applications/' + matches[0].uuid);
           const databaseResources = await get('/databases');
           const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
+          const knownDatabase = databaseMatches.length === 1 ? await get('/databases/' + databaseMatches[0].uuid) : null;
+          // Inspect only runtime variable names and safe connection metadata; never log variable values.
+          const configuredEnvs = await get('/applications/' + app.uuid + '/envs');
+          const runtimeEnvs = (Array.isArray(configuredEnvs) ? configuredEnvs : [])
+            .filter(item => item && item.is_preview !== true && item.is_runtime !== false);
+          const byKey = key => runtimeEnvs.find(item => item.key === key);
+          const envValue = key => {
+            const item = byKey(key);
+            if (!item) return '';
+            return (typeof item.real_value === 'string' && item.real_value) ||
+              (typeof item.value === 'string' ? item.value : '');
+          };
+          const configuredDbUrl = (() => { try { return new URL(envValue('DATABASE_URL')); } catch { return null; } })();
+          const dbEndpointFlags = value => {
+            if (!configuredDbUrl || !value) return false;
+            try {
+              const endpoint = new URL(value);
+              return endpoint.hostname.toLowerCase() === configuredDbUrl.hostname.toLowerCase() &&
+                (endpoint.port || '5432') === (configuredDbUrl.port || '5432') &&
+                decodeURIComponent(endpoint.pathname.slice(1)) === decodeURIComponent(configuredDbUrl.pathname.slice(1));
+            } catch { return false; }
+          };
+          const campaignSchema = envValue('CAMPAIGNS_DB_SCHEMA').trim();
+          const requiredRuntimeKeys = [
+            'DATABASE_URL', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_URL',
+            'MKETY_OPS_AUTH_ISSUER', 'MKETY_OPS_AUTH_CLIENT_ID',
+            'MKETY_OPS_ALLOWED_EMAIL', 'MKETY_OPS_AUTH_CALLBACK_URL'
+          ];
+          console.log('Campaigns Coolify runtime environment check:', JSON.stringify({
+            runtime_variable_count: runtimeEnvs.length,
+            required_keys_present: Object.fromEntries(requiredRuntimeKeys.map(key => [key, Boolean(byKey(key))])),
+            database_target_is_mkety: Boolean(configuredDbUrl && decodeURIComponent(configuredDbUrl.pathname.slice(1)) === 'mkety'),
+            database_url_matches_internal_endpoint: dbEndpointFlags(knownDatabase?.internal_db_url),
+            database_url_matches_external_endpoint: dbEndpointFlags(knownDatabase?.external_db_url),
+            database_resource_match_count: databaseMatches.length,
+            campaign_schema_is_expected: !campaignSchema || campaignSchema === 'campaigns'
+          }));
           if (databaseMatches.length === 1) {
-            const database = await get('/databases/' + databaseMatches[0].uuid);
+            const database = knownDatabase;
             let configuredDatabaseUrl;
             try { configuredDatabaseUrl = new URL(process.env.DATABASE_URL || ''); } catch { configuredDatabaseUrl = null; }
             const sameEndpoint = value => {
