@@ -355,7 +355,32 @@ jobs:
             const typescriptLocations = [...new Set([...diagnosticLogs.matchAll(/([A-Za-z0-9_./-]+\.tsx?)\((\d{1,6}),\d+\):\s*error TS2307/g)].map(match => match[1].split('/').pop() + ':' + match[2]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
-            if (migrationFailures.length) console.log('Sanitized Campaigns migration failure:', JSON.stringify(migrationFailures));
+            if (migrationFailures.length) {
+              const diagnostic = migrationFailures[0];
+              const targetSha = /^[0-9a-f]{40}$/i.test(String(detail.commit || '')) ? String(detail.commit) : '';
+              const description = ('Startup diagnostic: phase=' + diagnostic.phase + '; type=' + diagnostic.errorType + '; code=' + diagnostic.errorCode).slice(0, 140);
+              if (targetSha) {
+                const statusResponse = await fetch('https://api.github.com/repos/MketyDigital/mkety-campaigns/statuses/' + targetSha, {
+                  method: 'POST',
+                  headers: {
+                    authorization: 'Bearer ' + process.env.GITHUB_TOKEN,
+                    accept: 'application/vnd.github+json',
+                    'content-type': 'application/json',
+                    'x-github-api-version': '2022-11-28'
+                  },
+                  body: JSON.stringify({
+                    state: 'success',
+                    context: 'campaigns/startup-diagnostic',
+                    description,
+                    target_url: 'https://github.com/MketyDigital/mkety-campaigns/actions/runs/' + process.env.GITHUB_RUN_ID
+                  }),
+                  signal: AbortSignal.timeout(15000)
+                });
+                console.log(statusResponse.ok ? 'Sanitized startup diagnostic status published.' : 'Sanitized startup diagnostic status unavailable; HTTP ' + statusResponse.status + '.');
+              } else {
+                console.log('Sanitized startup diagnostic status unavailable; failed deployment commit was not a full SHA.');
+              }
+            }
             if (npmCodes.length) console.log('npm error codes:', JSON.stringify(npmCodes));
             if (typescriptCodes.length) console.log('TypeScript error codes:', JSON.stringify(typescriptCodes));
             if (unresolvedImports.length) console.log('TypeScript unresolved module specifiers:', JSON.stringify(unresolvedImports));
