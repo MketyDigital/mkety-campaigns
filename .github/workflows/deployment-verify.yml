@@ -77,9 +77,14 @@ jobs:
               console.log('Coolify Cloudflare DNS integration:', JSON.stringify({ configured: cloudflareTokens.length > 0, integrations: cloudflareTokens.map(item => ({ dns_capability: Array.isArray(item.capabilities) && item.capabilities.includes('dns'), dns_zones_count: Number.isInteger(item.dns_zones_count) ? item.dns_zones_count : null, automatic_dns: item.automatic_dns === true })) }));
             } catch { console.log('Coolify Cloudflare DNS integration: unavailable'); }
             if (server.ip) {
+              const dns = await import('node:dns/promises');
+              const resolved = await dns.lookup('campaign.mkety.com', { all: true }).catch(() => []);
+              const ipv4 = resolved.filter(item => item.family === 4);
+              const ipv6 = resolved.filter(item => item.family === 6);
+              console.log('Campaigns DNS A record check:', JSON.stringify({ matchesExpectedOrigin: ipv4.some(item => item.address === '89.168.70.209'), ipv4_count: ipv4.length, ipv6_count: ipv6.length }));
               const tls = await import('node:tls');
               const result = await new Promise(resolve => {
-                const socket = tls.connect({ host: server.ip, port: 443, servername: 'campaign.mkety.com', rejectUnauthorized: false, timeout: 8000 }, () => {
+                const socket = tls.connect({ host: '89.168.70.209', port: 443, servername: 'campaign.mkety.com', rejectUnauthorized: false, timeout: 8000 }, () => {
                   const cert = socket.getPeerCertificate();
                   resolve({ authorized: socket.authorized, authorization_error: socket.authorizationError || '', subject_cn: cert.subject?.CN || '', issuer_cn: cert.issuer?.CN || '', valid_from: cert.valid_from || '', valid_to: cert.valid_to || '', san_matches_campaign: String(cert.subjectaltname || '').includes('campaign.mkety.com') });
                   socket.destroy();
