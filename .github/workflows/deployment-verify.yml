@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Inspect Coolify application and latest deployment
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -61,6 +63,23 @@ jobs:
             process.exit(0);
           }
           const app = await get('/applications/' + matches[0].uuid);
+          const databaseResources = await get('/databases');
+          const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
+          if (databaseMatches.length === 1) {
+            const database = await get('/databases/' + databaseMatches[0].uuid);
+            let configuredDatabaseUrl;
+            try { configuredDatabaseUrl = new URL(process.env.DATABASE_URL || ''); } catch { configuredDatabaseUrl = null; }
+            const sameEndpoint = value => {
+              if (!configuredDatabaseUrl || !value) return false;
+              try {
+                const endpoint = new URL(value);
+                return endpoint.hostname.toLowerCase() === configuredDatabaseUrl.hostname.toLowerCase() &&
+                  (endpoint.port || '5432') === (configuredDatabaseUrl.port || '5432') &&
+                  decodeURIComponent(endpoint.pathname.slice(1)) === decodeURIComponent(configuredDatabaseUrl.pathname.slice(1));
+              } catch { return false; }
+            };
+            console.log('Coolify database endpoint classification:', JSON.stringify({ resource_status: String(database.status || 'unknown').slice(0, 40), target_database_is_mkety: Boolean(configuredDatabaseUrl && decodeURIComponent(configuredDatabaseUrl.pathname.slice(1)) === 'mkety'), matches_internal_endpoint: sameEndpoint(database.internal_db_url), matches_external_endpoint: sameEndpoint(database.external_db_url) }));
+          } else console.log('Coolify database endpoint classification: resource match count=' + databaseMatches.length);
           const safeDomains = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean).map(item => {
             try { const url = new URL(item.includes('://') ? item : 'https://' + item); return { host: url.hostname, scheme: url.protocol.replace(':','') }; }
             catch { return { host: 'invalid', scheme: 'unknown' }; }
