@@ -63,7 +63,6 @@ jobs:
             process.exit(0);
           }
           const app = await get('/applications/' + matches[0].uuid);
-          const app = await get('/applications/' + matches[0].uuid);
           const databaseResources = await get('/databases');
           const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
           const knownDatabase = databaseMatches.length === 1 ? await get('/databases/' + databaseMatches[0].uuid) : null;
