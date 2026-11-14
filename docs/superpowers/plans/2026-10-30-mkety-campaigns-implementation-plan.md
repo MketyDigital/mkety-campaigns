@@ -3,6 +3,8 @@
 Date: 2026-10-30
 Design: [Platform design](../specs/2026-10-29-mkety-campaigns-platform-design.md)
 
+> Historical implementation plan. The owner selected the existing Coolify `mkety-postgres` service and logical `mkety` database with the isolated `campaigns` schema; do not create another database or PostgreSQL service. Current production evidence and open gates are tracked in [development-status.md](../../operations/development-status.md).
+
 ## Delivery order
 
 ### 1. Project foundation
@@ -49,4 +51,4 @@ Design: [Platform design](../specs/2026-10-29-mkety-campaigns-platform-design.md
 - No production campaign send until provider/domain tests and explicit owner signoff.
 - No SMS send until destination pricing, sender, registration, consent and usage caps are reviewed.
 - No OCI backup writes while the feature flag is off.
-- No production deployment until dedicated Campaigns database name and Coolify runtime variables are verified without exposing secrets.
+- Production deployment uses the existing `mkety` database on `mkety-postgres`, with Campaigns tables and migration history isolated in schema `campaigns`; verify the runtime URL and schema without exposing secrets. A separate database or PostgreSQL service is out of scope.
