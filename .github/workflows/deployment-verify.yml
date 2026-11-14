@@ -20,6 +20,7 @@ jobs:
     env:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      CAMPAIGNS_DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
       GITHUB_TOKEN: ${{ github.token }}
       OCI_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
       OCI_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
@@ -234,6 +235,40 @@ jobs:
             console.log('Runtime log endpoint request failed:', JSON.stringify({ error_type: errorType, network_code: safeCode }));
           }
           NODE
+
+      - name: Check shared PostgreSQL connectivity and schema privileges
+        continue-on-error: true
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
+        run: |
+          set -uo pipefail
+          if [[ -z "${DATABASE_URL:-}" ]]; then
+            echo "PostgreSQL probe unavailable: database secret missing"
+            exit 0
+          fi
+          if ! command -v psql >/dev/null 2>&1; then
+            echo "PostgreSQL probe unavailable: psql client missing"
+            exit 0
+          fi
+          error_file="$(mktemp)"
+          trap 'rm -f "$error_file"' EXIT
+          query="SELECT current_database() = 'mkety', EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'campaigns'), COALESCE((SELECT has_schema_privilege(current_user, oid, 'USAGE') FROM pg_namespace WHERE nspname = 'campaigns'), false), COALESCE((SELECT has_schema_privilege(current_user, oid, 'CREATE') FROM pg_namespace WHERE nspname = 'campaigns'), false), has_database_privilege(current_user, current_database(), 'CREATE');"
+          if result="$(psql "$DATABASE_URL" --no-psqlrc --quiet --tuples-only --no-align --field-separator='|' --set=ON_ERROR_STOP=1 --command "$query" 2>"$error_file")"; then
+            if [[ "$result" =~ ^[tf][|][tf][|][tf][|][tf][|][tf]$ ]]; then
+              IFS='|' read -r database_ok schema_exists schema_usage schema_create database_create <<<"$result"
+              printf 'PostgreSQL target and privilege check: %s\\n' "{\"database_is_mkety\":$database_ok,\"campaigns_schema_exists\":$schema_exists,\"schema_usage\":$schema_usage,\"schema_create\":$schema_create,\"database_create\":$database_create}"
+            else
+              echo "PostgreSQL probe completed with an unrecognized result shape"
+            fi
+          else
+            if grep -Eqi 'password authentication failed|authentication failed' "$error_file"; then category="authentication"
+            elif grep -Eqi 'could not translate host|name or service not known|temporary failure in name resolution' "$error_file"; then category="dns-resolution"
+            elif grep -Eqi 'connection refused|connection timed out|timeout expired|no route to host|could not connect' "$error_file"; then category="network-connectivity"
+            elif grep -Eqi 'permission denied|must be owner|not authorized|insufficient privilege' "$error_file"; then category="database-permissions"
+            else category="other"; fi
+            echo "PostgreSQL probe unavailable; failure_category=$category"
+          fi
 
       - name: Resolve manual DNS target through read-only OCI compute inventory
         continue-on-error: true
