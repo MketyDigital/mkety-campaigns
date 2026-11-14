@@ -56,10 +56,12 @@ The owner selected the phased approach and asked to deliver the full roadmap in 
 
 ## Current readiness and dependencies
 
+> Historical snapshot from 2026-10-29. Current deployment and pilot status is maintained in [development-status.md](../../operations/development-status.md); the information below records dependencies and options considered at design time.
+
 Already available in the repository secrets: Coolify URL/token, PostgreSQL URL, Cloudflare R2 credentials, ACS connection string, Azure Blob connection string/container, and OCI Email endpoint, region, tenancy, compartment, user, API signing fingerprint/private key, and policy OCID.
 
 Still required before production campaign sending: a verified/linked sender domain, explicit provider test and approval, and the scoped Azure management identity for portal-driven domain provisioning. SMS is in scope through a provider adapter, but its provider and target countries must be finalized; live SMS also requires an eligible sender, required registrations, and country approval.
 
 OCI backup bucket provisioning is separate from activation. An empty bucket has no stored-data capacity charge; requests may be metered. A private bucket is appropriate, and no backup object will be written while the integration is off. Infrequent Access is an object-level tier with 31-day minimum retention and retrieval fees, so it must be selected only when the backup job is deliberately enabled. The SMS provider shortlist is Telnyx for transparent PAYG pricing, subject to destination-market review; no SMS provider is activated by this design.
 
-The GitHub repository currently contains only its roadmap README; this design does not claim the application is already implemented or deployed.
+This original design predates the application implementation and production deployment. It remains the historical design record; use the current status report for implementation and live deployment evidence.
