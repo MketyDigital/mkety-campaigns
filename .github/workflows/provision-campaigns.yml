@@ -6,6 +6,12 @@ on:
     paths:
       - .github/workflows/provision-campaigns.yml
       - Dockerfile
+      - src/**
+      - scripts/**
+      - migrations/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
   workflow_dispatch:
     # 2026-11-14: retrigger provisioning after the campaign DNS A record was corrected.
 
