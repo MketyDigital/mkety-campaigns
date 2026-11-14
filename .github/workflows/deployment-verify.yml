@@ -325,6 +325,15 @@ jobs:
             const diagnosticLogs = logs.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u0000/g, '');
             const knownStartupCodes = new Set(['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','EHOSTUNREACH','EADDRNOTAVAIL','EPIPE','EACCES','EPERM','UNABLE_TO_VERIFY_LEAF_SIGNATURE','SELF_SIGNED_CERT_IN_CHAIN','DEPTH_ZERO_SELF_SIGNED_CERT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID']);
             const startupCodes = [...new Set([...diagnosticLogs.matchAll(/\b([A-Z][A-Z0-9_]{2,45})\b/g)].map(match => match[1]).filter(code => knownStartupCodes.has(code)))];
+            const connectionCause = /ECONNREFUSED|connection refused/i.test(diagnosticLogs) ? 'connection-refused'
+              : /ENOTFOUND|getaddrinfo|name.{0,20}resolution/i.test(diagnosticLogs) ? 'name-resolution'
+              : /ETIMEDOUT|connect timeout|timeout expired/i.test(diagnosticLogs) ? 'connection-timeout'
+              : /ECONNRESET|connection reset/i.test(diagnosticLogs) ? 'connection-reset'
+              : /could not connect/i.test(diagnosticLogs) ? 'connect-error'
+              : /28P01|password authentication failed/i.test(diagnosticLogs) ? 'database-authentication'
+              : /42501|permission denied.{0,80}schema|insufficient privilege/i.test(diagnosticLogs) ? 'database-permissions'
+              : /UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT_IN_CHAIN|DEPTH_ZERO_SELF_SIGNED_CERT/i.test(diagnosticLogs) ? 'tls-certificate'
+              : null;
             const deployedCommit = /^[0-9a-f]{7,40}$/i.test(String(detail.commit || '')) ? String(detail.commit).slice(0, 12) : null;
             console.log('Coolify failed deployment summary:', JSON.stringify({
               status: String(detail.status || 'unknown').slice(0, 40),
@@ -360,9 +369,9 @@ jobs:
             if (!migrationFailures.length && (categories.length || startupCodes.length || sqlstates.length)) {
               const targetSha = /^[0-9a-f]{40}$/i.test(String(detail.commit || '')) ? String(detail.commit) : '';
               const category = categories.slice(0, 2).join(',') || 'unclassified';
-              const code = startupCodes[0] || sqlstates[0] || 'unclassified';
+              const cause = connectionCause || startupCodes[0] || sqlstates[0] || 'unclassified';
               const listening = /MKETY Campaigns listening on http/i.test(diagnosticLogs) ? 'yes' : 'no';
-              const description = ('Startup diagnostic: category=' + category + '; code=' + code + '; listening=' + listening).slice(0, 140);
+              const description = ('Startup diagnostic: category=' + category + '; cause=' + cause + '; listening=' + listening).slice(0, 140);
               if (targetSha) {
                 const statusResponse = await fetch('https://api.github.com/repos/MketyDigital/mkety-campaigns/statuses/' + targetSha, {
                   method: 'POST',
