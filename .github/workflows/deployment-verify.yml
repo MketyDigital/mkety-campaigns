@@ -302,9 +302,9 @@ jobs:
             }
           }
           // Temporary diagnostic: TLS is already measured separately; bypass certificate validation only for this read-only readiness probe.
+          const { request: httpsRequest } = await import('node:https');
           const directReadyProbe = await new Promise(resolve => {
-            const https = await import('node:https');
-            const request = https.request({
+            const request = httpsRequest({
               hostname: '89.168.70.209',
               port: 443,
               path: '/readyz',
