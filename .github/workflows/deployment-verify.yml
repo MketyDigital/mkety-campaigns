@@ -20,7 +20,6 @@ jobs:
     env:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
-      CAMPAIGNS_DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
       GITHUB_TOKEN: ${{ github.token }}
       OCI_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
       OCI_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
@@ -241,6 +240,7 @@ jobs:
         shell: bash
         env:
           DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
+          PGCONNECT_TIMEOUT: 8
         run: |
           set -uo pipefail
           if [[ -z "${DATABASE_URL:-}" ]]; then
@@ -257,7 +257,7 @@ jobs:
           if result="$(psql "$DATABASE_URL" --no-psqlrc --quiet --tuples-only --no-align --field-separator='|' --set=ON_ERROR_STOP=1 --command "$query" 2>"$error_file")"; then
             if [[ "$result" =~ ^[tf][|][tf][|][tf][|][tf][|][tf]$ ]]; then
               IFS='|' read -r database_ok schema_exists schema_usage schema_create database_create <<<"$result"
-              printf 'PostgreSQL target and privilege check: %s\\n' "{\"database_is_mkety\":$database_ok,\"campaigns_schema_exists\":$schema_exists,\"schema_usage\":$schema_usage,\"schema_create\":$schema_create,\"database_create\":$database_create}"
+              echo "PostgreSQL target and privilege check: {\"database_is_mkety\":$database_ok,\"campaigns_schema_exists\":$schema_exists,\"schema_usage\":$schema_usage,\"schema_create\":$schema_create,\"database_create\":$database_create}"
             else
               echo "PostgreSQL probe completed with an unrecognized result shape"
             fi
