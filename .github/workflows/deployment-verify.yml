@@ -342,14 +342,13 @@ jobs:
                 } catch { return []; }
               });
             if (migrationFailures.length === 0 && /Campaigns PostgreSQL migration failed:/.test(diagnosticLogs)) {
-              const safeField = (key, valuePattern) => {
-                const match = diagnosticLogs.match(new RegExp('\\\\b' + key + '\\\\b[^A-Za-z0-9]+(' + valuePattern + ')'));
-                return match?.[1] || null;
-              };
+              const phase = diagnosticLogs.match(/phase[^A-Za-z0-9]+([A-Za-z0-9 ._-]{1,120})/)?.[1]?.trim();
+              const errorType = diagnosticLogs.match(/errorType[^A-Za-z0-9]+([A-Za-z0-9]{1,40})/)?.[1];
+              const errorCode = diagnosticLogs.match(/errorCode[^A-Za-z0-9]+([A-Z0-9_]{2,32})/)?.[1];
               migrationFailures.push({
-                phase: safeField('phase', '[A-Za-z0-9 ._-]{1,120}') || 'unknown',
-                errorType: safeField('errorType', '[A-Za-z0-9]{1,40}') || 'unknown',
-                errorCode: safeField('errorCode', '[A-Z0-9_]{2,32}') || 'unclassified'
+                phase: phase || 'unknown',
+                errorType: errorType || 'unknown',
+                errorCode: errorCode || 'unclassified'
               });
             }
             const unresolvedImports = [...new Set([...diagnosticLogs.matchAll(/Cannot find module\s+(['"])([^'"]{1,180})\1/gi)].map(match => /^[A-Za-z0-9@._:/-]+$/.test(match[2]) ? match[2] : '[nonstandard module specifier]'))];
