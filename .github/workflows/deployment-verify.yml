@@ -177,6 +177,18 @@ jobs:
             if (typescriptLocations.length) console.log('TypeScript TS2307 source locations:', JSON.stringify(typescriptLocations));
             if (categories.length === 0 && sqlstates.length === 0 && npmCodes.length === 0 && typescriptCodes.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
           }
+          try {
+            const runtime = await get('/applications/' + app.uuid + '/logs?lines=100');
+            const runtimeLogs = String(runtime.logs || '');
+            const runtimeCategories = [];
+            if (/28P01|password authentication failed|database authentication failed/i.test(runtimeLogs)) runtimeCategories.push('database-authentication');
+            if (/ECONNREFUSED|connect timeout|ETIMEDOUT|ENOTFOUND|ECONNRESET|could not connect/i.test(runtimeLogs)) runtimeCategories.push('database-or-service-connectivity');
+            if (/migration.{0,100}(failed|error|exception)|(?:failed|error|exception).{0,100}migration/i.test(runtimeLogs)) runtimeCategories.push('migration-failure');
+            if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(runtimeLogs)) runtimeCategories.push('authentication-configuration');
+            if (/EADDRINUSE|listen EACCES|port.{0,40}(in use|unavailable|failed)/i.test(runtimeLogs)) runtimeCategories.push('port-binding');
+            if (/uncaught exception|unhandled rejection|fatal error|process exited/i.test(runtimeLogs)) runtimeCategories.push('runtime-exception');
+            console.log('Sanitized runtime log summary:', JSON.stringify({ categories: runtimeCategories, listening_seen: /listening|server started/i.test(runtimeLogs), lines: runtimeLogs.split('\\n').filter(Boolean).length }));
+          } catch { console.log('Sanitized runtime log summary: unavailable'); }
           NODE
 
       - name: Resolve manual DNS target through read-only OCI compute inventory
