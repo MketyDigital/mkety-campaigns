@@ -204,12 +204,31 @@ jobs:
                 domains: 'https://campaign.mkety.com',
                 health_check_enabled: true,
                 health_check_path: '/readyz',
-                health_check_port: '3000'
+                health_check_port: '3000',
+                health_check_scheme: 'http',
+                health_check_start_period: 180,
+                health_check_interval: 10,
+                health_check_timeout: 5,
+                health_check_retries: 6
               })
             });
             if (!app.uuid) throw new Error('Coolify did not return the new application UUID.');
           }
           const appUuid = app.uuid;
+          await request('/applications/' + appUuid, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              health_check_enabled: true,
+              health_check_path: '/readyz',
+              health_check_port: '3000',
+              health_check_scheme: 'http',
+              health_check_start_period: 180,
+              health_check_interval: 10,
+              health_check_timeout: 5,
+              health_check_retries: 6
+            })
+          });
+          console.log('Campaigns health check configured: /readyz with 180-second startup period; database readiness remains required.');
           const current = await request('/applications/' + appUuid + '/envs');
           const present = new Set(current.map(item => item.key));
           const authSecret = secret || (present.has('BETTER_AUTH_SECRET') ? null : randomBytes(48).toString('base64url'));
