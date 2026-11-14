@@ -198,7 +198,7 @@ jobs:
           });
           const safePath = value => /^[A-Za-z0-9/_-]{1,120}$/.test(String(value || '')) ? String(value) : 'unknown';
           const safePort = value => /^[0-9]{1,5}$/.test(String(value || '')) ? Number(value) : null;
-          console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: safeDomains(app.domains || app.fqdn), status: app.status, health_check_enabled: app.health_check_enabled, health_check_path: safePath(app.health_check_path), health_check_port: safePort(app.health_check_port), health_check_scheme: ['http','https'].includes(app.health_check_scheme) ? app.health_check_scheme : 'unknown', exposed_ports: String(app.ports_exposes || '').split(',').map(value => safePort(value)).filter(value => value !== null), build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha }));
+          console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: safeDomains(app.domains || app.fqdn), status: app.status, health_check_enabled: app.health_check_enabled, health_check_path: safePath(app.health_check_path), health_check_port: safePort(app.health_check_port), health_check_scheme: ['http','https'].includes(app.health_check_scheme) ? app.health_check_scheme : 'unknown', exposed_ports: String(app.ports_exposes || '').split(',').map(value => safePort(value)).filter(value => value !== null), build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha, start_command_configured: Boolean(app.start_command || app.command), build_command_configured: Boolean(app.build_command), install_command_configured: Boolean(app.install_command) }));
           const websiteCandidates = apps.filter(item => item.uuid !== app.uuid && String(item.domains || item.fqdn || '').trim());
           const websiteDetails = await Promise.all(websiteCandidates.slice(0, 25).map(async item => {
             try {
@@ -323,6 +323,14 @@ jobs:
             const npmCodes = [...new Set([...logs.matchAll(/npm (?:ERR!|error) code ([A-Z0-9_]{3,16})/gi)].map(match => match[1].toUpperCase()).filter(code => knownNpmCodes.has(code)))];
             const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
             const diagnosticLogs = logs.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u0000/g, '');
+            const deployedCommit = /^[0-9a-f]{7,40}$/i.test(String(detail.commit || '')) ? String(detail.commit).slice(0, 12) : null;
+            console.log('Coolify failed deployment summary:', JSON.stringify({
+              status: String(detail.status || 'unknown').slice(0, 40),
+              source_commit: deployedCommit,
+              migration_diagnostic_marker_seen: /Campaigns PostgreSQL migration failed:/.test(diagnosticLogs),
+              application_listening_marker_seen: /MKETY Campaigns listening on http/i.test(diagnosticLogs),
+              log_line_count: diagnosticLogs.split(String.fromCharCode(10)).filter(Boolean).length
+            }));
             const migrationFailures = [...diagnosticLogs.matchAll(/Campaigns PostgreSQL migration failed:\s*(\{[^\r\n]{1,500}\})/g)]
               .flatMap(match => {
                 try {
@@ -374,6 +382,41 @@ jobs:
             const safeCode = ['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET'].includes(code) ? code : 'unclassified';
             const errorType = ['TypeError','SyntaxError','AbortError','Error'].includes(error?.name) ? error.name : 'unclassified';
             console.log('Runtime log endpoint request failed:', JSON.stringify({ error_type: errorType, network_code: safeCode }));
+          }
+          // Database container logs can reveal rejected app connections without exposing log text.
+          if (knownDatabase?.uuid) {
+            try {
+              const response = await fetch(api + '/databases/' + knownDatabase.uuid + '/logs?lines=100', {
+                headers: { authorization: 'Bearer ' + token, accept: 'application/json' },
+                signal: AbortSignal.timeout(15000)
+              });
+              const body = await response.text();
+              if (response.ok) {
+                let payload;
+                try { payload = JSON.parse(body); } catch { payload = null; }
+                const databaseLogs = typeof payload?.logs === 'string' ? payload.logs : '';
+                const categories = [];
+                if (/28P01|password authentication failed|database authentication failed/i.test(databaseLogs)) categories.push('authentication');
+                if (/3D000|database .{0,60} does not exist/i.test(databaseLogs)) categories.push('database-not-found');
+                if (/no pg_hba.conf entry|too many connections|remaining connection slots/i.test(databaseLogs)) categories.push('connection-policy-or-capacity');
+                if (/42501|permission denied.{0,80}schema|insufficient privilege/i.test(databaseLogs)) categories.push('database-permissions');
+                console.log('Sanitized mkety-postgres log summary:', JSON.stringify({
+                  lines: databaseLogs.split(String.fromCharCode(10)).filter(Boolean).length,
+                  categories,
+                  logs_field_present: typeof payload?.logs === 'string'
+                }));
+              } else {
+                const message = body.toLowerCase();
+                const category = /unauthori[sz]ed|forbidden|permission/.test(message) ? 'permission'
+                  : /not running|no container|container.{0,40}(not found|missing|unavailable)/.test(message) ? 'container-unavailable'
+                  : 'other';
+                console.log('mkety-postgres log endpoint response:', JSON.stringify({ http_status: response.status, api_error_category: category }));
+              }
+            } catch (error) {
+              const code = String(error?.cause?.code || error?.code || 'unknown');
+              const safeCode = ['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET'].includes(code) ? code : 'unclassified';
+              console.log('mkety-postgres log endpoint request failed:', safeCode);
+            }
           }
           NODE
 
