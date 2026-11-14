@@ -124,8 +124,14 @@ jobs:
           const database = await request('/databases/' + candidates[0].uuid);
           const approvedDbUrls = [database.internal_db_url, database.external_db_url].filter(Boolean).map(value => { try { return new URL(value); } catch { return null; } }).filter(Boolean);
           const port = value => value.port || '5432';
-          const dbEndpointMatch = approvedDbUrls.some(value => value.hostname.toLowerCase() === databaseUrl.hostname.toLowerCase() && port(value) === port(databaseUrl) && decodeURIComponent(value.pathname.slice(1)) === 'mkety');
+          const sameMketyEndpoint = value => value.hostname.toLowerCase() === databaseUrl.hostname.toLowerCase() && port(value) === port(databaseUrl) && decodeURIComponent(value.pathname.slice(1)) === 'mkety';
+          const dbEndpointMatch = approvedDbUrls.some(sameMketyEndpoint);
+          const internalDbEndpointMatch = database.internal_db_url ? sameMketyEndpoint(new URL(database.internal_db_url)) : false;
           if (!dbEndpointMatch) throw new Error('MKETY_DATABASE_URL host/port does not match the verified mkety-postgres Coolify endpoint; no app was created.');
+          if (internalDbEndpointMatch && databaseUrl.searchParams.get('sslmode') === 'require') {
+            databaseUrl.searchParams.set('sslmode', 'no-verify');
+            console.log('Internal mkety-postgres TLS compatibility: encryption retained; certificate verification disabled because the deployed certificate chain is untrusted. Connection values are not logged.');
+          }
           const dbEnvironment = database.environment_uuid || database.environment?.uuid || database.environmentUuid ||
             (environment.id != null && String(database.environment_id) === String(environment.id) ? environment.uuid : null);
           let dbServer = database.server_uuid || database.destination?.server_uuid || database.destination?.server?.uuid || database.server?.uuid;
@@ -206,7 +212,7 @@ jobs:
             NODE_ENV: 'production',
             HOST: '0.0.0.0',
             PORT: '3000',
-            DATABASE_URL: process.env.DATABASE_URL,
+            DATABASE_URL: databaseUrl.toString(),
             CAMPAIGNS_DB_SCHEMA: 'campaigns',
             BETTER_AUTH_URL: 'https://campaign.mkety.com',
             EMAIL_PROVIDER: 'acs-email',
