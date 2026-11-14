@@ -61,7 +61,32 @@ jobs:
             process.exit(0);
           }
           const app = await get('/applications/' + matches[0].uuid);
-          console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: app.domains || app.fqdn, status: app.status, health_check_enabled: app.health_check_enabled, build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha }));
+          const safeDomains = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean).map(item => {
+            try { const url = new URL(item.includes('://') ? item : 'https://' + item); return { host: url.hostname, scheme: url.protocol.replace(':','') }; }
+            catch { return { host: 'invalid', scheme: 'unknown' }; }
+          });
+          const safePath = value => /^[A-Za-z0-9/_-]{1,120}$/.test(String(value || '')) ? String(value) : 'unknown';
+          const safePort = value => /^[0-9]{1,5}$/.test(String(value || '')) ? Number(value) : null;
+          console.log('Campaigns app metadata:', JSON.stringify({ name: app.name, uuid: app.uuid, domains: safeDomains(app.domains || app.fqdn), status: app.status, health_check_enabled: app.health_check_enabled, health_check_path: safePath(app.health_check_path), health_check_port: safePort(app.health_check_port), health_check_scheme: ['http','https'].includes(app.health_check_scheme) ? app.health_check_scheme : 'unknown', exposed_ports: String(app.ports_exposes || '').split(',').map(value => safePort(value)).filter(value => value !== null), build_pack: app.build_pack, base_directory: app.base_directory, dockerfile_location: app.dockerfile_location, git_branch: app.git_branch, git_commit_sha: app.git_commit_sha }));
+          const websiteCandidates = apps.filter(item => item.uuid !== app.uuid && String(item.domains || item.fqdn || '').trim());
+          const websiteDetails = await Promise.all(websiteCandidates.slice(0, 25).map(async item => {
+            try {
+              const detail = await get('/applications/' + item.uuid);
+              return {
+                name: String(detail.name || item.name || 'unknown').slice(0, 80),
+                uuid: String(detail.uuid || item.uuid || '').slice(0, 40),
+                domains: safeDomains(detail.domains || detail.fqdn),
+                status: String(detail.status || 'unknown').slice(0, 40),
+                build_pack: ['dockerfile','nixpacks','railpack','static','dockercompose'].includes(detail.build_pack) ? detail.build_pack : 'unknown',
+                exposed_ports: String(detail.ports_exposes || '').split(',').map(value => safePort(value)).filter(value => value !== null),
+                health_check_enabled: detail.health_check_enabled === true,
+                health_check_path: safePath(detail.health_check_path),
+                health_check_port: safePort(detail.health_check_port),
+                health_check_scheme: ['http','https'].includes(detail.health_check_scheme) ? detail.health_check_scheme : 'unknown'
+              };
+            } catch { return { name: String(item.name || 'unknown').slice(0, 80), detail: 'unavailable' }; }
+          }));
+          console.log('Coolify website app comparison:', JSON.stringify({ apps_with_domains: websiteCandidates.length, scanned: websiteDetails.length, omitted: Math.max(0, websiteCandidates.length - websiteDetails.length), other_apps: websiteDetails }));
           // Read-only TLS diagnostic: connect to the Coolify server directly without exposing its address.
           const servers = await get('/servers');
           if (servers.length === 1 && servers[0]?.uuid) {
