@@ -63,6 +63,10 @@ jobs:
             process.exit(0);
           }
           const app = await get('/applications/' + matches[0].uuid);
+          const app = await get('/applications/' + matches[0].uuid);
+          const databaseResources = await get('/databases');
+          const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
+          const knownDatabase = databaseMatches.length === 1 ? await get('/databases/' + databaseMatches[0].uuid) : null;
           // Inspect only runtime variable names and safe connection metadata; never log variable values.
           const configuredEnvs = await get('/applications/' + app.uuid + '/envs');
           const runtimeEnvs = (Array.isArray(configuredEnvs) ? configuredEnvs : [])
@@ -71,8 +75,8 @@ jobs:
           const envValue = key => {
             const item = byKey(key);
             if (!item) return '';
-            return typeof item.real_value === 'string' ? item.real_value :
-              typeof item.value === 'string' ? item.value : '';
+            return (typeof item.real_value === 'string' && item.real_value) ||
+              (typeof item.value === 'string' ? item.value : '');
           };
           const configuredDbUrl = (() => { try { return new URL(envValue('DATABASE_URL')); } catch { return null; } })();
           const dbEndpointFlags = value => {
@@ -94,15 +98,13 @@ jobs:
             runtime_variable_count: runtimeEnvs.length,
             required_keys_present: Object.fromEntries(requiredRuntimeKeys.map(key => [key, Boolean(byKey(key))])),
             database_target_is_mkety: Boolean(configuredDbUrl && decodeURIComponent(configuredDbUrl.pathname.slice(1)) === 'mkety'),
-            database_url_matches_internal_endpoint: dbEndpointFlags((await get('/databases')).find(item => item.name === 'mkety-postgres')?.internal_db_url),
-            database_url_matches_external_endpoint: dbEndpointFlags((await get('/databases')).find(item => item.name === 'mkety-postgres')?.external_db_url),
-            campaign_schema_effective: campaignSchema || 'campaigns',
+            database_url_matches_internal_endpoint: dbEndpointFlags(knownDatabase?.internal_db_url),
+            database_url_matches_external_endpoint: dbEndpointFlags(knownDatabase?.external_db_url),
+            database_resource_match_count: databaseMatches.length,
             campaign_schema_is_expected: !campaignSchema || campaignSchema === 'campaigns'
           }));
-          const databaseResources = await get('/databases');
-          const databaseMatches = databaseResources.filter(item => item.name === 'mkety-postgres');
           if (databaseMatches.length === 1) {
-            const database = await get('/databases/' + databaseMatches[0].uuid);
+            const database = knownDatabase;
             let configuredDatabaseUrl;
             try { configuredDatabaseUrl = new URL(process.env.DATABASE_URL || ''); } catch { configuredDatabaseUrl = null; }
             const sameEndpoint = value => {
