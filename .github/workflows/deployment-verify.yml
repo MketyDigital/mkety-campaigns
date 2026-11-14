@@ -96,6 +96,15 @@ jobs:
             'MKETY_OPS_AUTH_ISSUER', 'MKETY_OPS_AUTH_CLIENT_ID',
             'MKETY_OPS_ALLOWED_EMAIL', 'MKETY_OPS_AUTH_CALLBACK_URL'
           ];
+          const providerKeyGroups = {
+            acs_email: ['ACS_EMAIL_CONNECTION_STRING'],
+            oci_email_delivery: ['OCI_EMAIL_ENDPOINT', 'OCI_EMAIL_REGION', 'OCI_EMAIL_TENANCY_OCID', 'OCI_EMAIL_USER_OCID', 'OCI_EMAIL_FINGERPRINT', 'OCI_EMAIL_PRIVATE_KEY', 'OCI_EMAIL_COMPARTMENT_OCID'],
+            azure_domain_management: ['AZURE_ARM_TENANT_ID', 'AZURE_ARM_CLIENT_ID', 'AZURE_ARM_CLIENT_SECRET', 'AZURE_SUBSCRIPTION_ID', 'AZURE_RESOURCE_GROUP', 'AZURE_EMAIL_SERVICE_NAME', 'AZURE_COMMUNICATION_SERVICE_NAME']
+          };
+          const providerKeyStatus = Object.fromEntries(Object.entries(providerKeyGroups).map(([name, keys]) => {
+            const present = keys.filter(key => Boolean(byKey(key)));
+            return [name, { present_count: present.length, expected_count: keys.length, missing_keys: keys.filter(key => !byKey(key)) }];
+          }));
           console.log('Campaigns Coolify runtime environment check:', JSON.stringify({
             runtime_variable_count: runtimeEnvs.length,
             required_keys_present: Object.fromEntries(requiredRuntimeKeys.map(key => [key, Boolean(byKey(key))])),
@@ -106,7 +115,9 @@ jobs:
             database_url_matches_internal_endpoint: dbEndpointFlags(knownDatabase?.internal_db_url),
             database_url_matches_external_endpoint: dbEndpointFlags(knownDatabase?.external_db_url),
             database_resource_match_count: databaseMatches.length,
-            campaign_schema_is_expected: !campaignSchema || campaignSchema === 'campaigns'
+            campaign_schema_is_expected: !campaignSchema || campaignSchema === 'campaigns',
+            email_provider_is_acs: envValue('EMAIL_PROVIDER') === 'acs-email',
+            provider_key_status: providerKeyStatus
           }));
           if (databaseMatches.length === 1) {
             const database = knownDatabase;
