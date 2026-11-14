@@ -111,6 +111,17 @@ jobs:
               } catch { console.log('Origin TLS status publication: unavailable'); }
             } else console.log('Direct Coolify origin TLS probe unavailable: server IP metadata missing.');
           } else console.log('Direct Coolify origin TLS probe unavailable: server count was not one.');
+          // Confirm the HTTP-01 entry point is publicly reachable before requesting a new certificate.
+          try {
+            const response = await fetch('http://campaign.mkety.com/', { redirect: 'manual', signal: AbortSignal.timeout(8000) });
+            const location = response.headers.get('location') || '';
+            const redirectToHttps = /^https:\/\//i.test(location);
+            console.log('Public HTTP port 80 probe: HTTP ' + response.status + '; redirect_to_https=' + redirectToHttps);
+          } catch (error) {
+            const code = error?.cause?.code || error?.code || '';
+            const allowed = new Set(['ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ECONNRESET','ETIMEDOUT','EHOSTUNREACH','UND_ERR_CONNECT_TIMEOUT']);
+            console.log('Public HTTP port 80 probe unavailable; network=' + (allowed.has(code) ? code : 'unclassified'));
+          }
           // Public, read-only probes distinguish DNS/TLS/listener failures from a database readiness failure.
           for (const path of ['/healthz', '/readyz']) {
             try {
