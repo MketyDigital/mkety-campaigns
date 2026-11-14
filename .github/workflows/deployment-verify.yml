@@ -358,7 +358,7 @@ jobs:
             if (migrationFailures.length) {
               const diagnostic = migrationFailures[0];
               const targetSha = /^[0-9a-f]{40}$/i.test(String(detail.commit || '')) ? String(detail.commit) : '';
-              const phaseMatch = diagnosticLogs.match(/phase\\?["']?\\s*[:=]\\s*\\?["']?([A-Za-z0-9 ._-]{1,120}?)(?=\\?["']?\\s*[,}]|\\s+(?:errorType|errorCode))/);
+              const phaseMatch = diagnosticLogs.match(/phase\\?["']?\s*[:=]\s*\\?["']?([A-Za-z0-9 ._-]{1,120}?)(?=\\?["']?\s*[,}]|\s+(?:errorType|errorCode))/);
               const phase = phaseMatch?.[1]?.trim() || 'unclassified';
               let databaseTlsMode = 'unavailable';
               try {
