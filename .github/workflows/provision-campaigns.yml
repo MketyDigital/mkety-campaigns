@@ -92,8 +92,9 @@ jobs:
             try { ociEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT || ''); }
             catch { throw new Error('OCI Email Delivery endpoint is invalid; value suppressed.'); }
             if (ociEndpoint.protocol !== 'https:') throw new Error('OCI Email Delivery endpoint must use HTTPS; value suppressed.');
-            try { createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY); }
-            catch { throw new Error('OCI Email Delivery private key is not a valid PEM private key; value suppressed.'); }
+            try {
+              if (createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY).asymmetricKeyType !== 'rsa') throw new Error('wrong key type');
+            } catch { throw new Error('OCI Email Delivery private key is not an unencrypted RSA PEM key; value suppressed.'); }
           }
           console.log('Provider credential preflight passed; credential values are not logged.');
           const secret = (process.env.BETTER_AUTH_SECRET || '').trim();
