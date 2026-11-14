@@ -75,13 +75,13 @@ Modules: tenants, single business access seat, contacts, consent, domains, templ
 Provider contract: validateConfig, verifyDomain, getCapabilities, send, resolveDeliveryStatus, normalizeEvent, enforceSuppression. The email adapter is selected by the deployment environment; SMS and OCI Object Storage backup stay disabled. State transitions are idempotent and replay-safe.
 
 ## Phases / acceptance gates
-0. Verify Azure sponsorship, ACS resource linkage, email domain support, SMS country/number eligibility, provider quotas, subscription limitations, and independent hosting plan. No customer uploads.
-1. Complete standalone foundation, CI/test environment, authentication/MFA, tenant-bound authorization, and no integrations to existing MKETY production. The app shell, migrations, invite-only auth, TOTP gate, and provider interfaces are in place; database-level RLS, full admin onboarding, and customer-data endpoints are not.
-2. ACS and OCI domain/sender onboarding, the consent-aware email queue, and provider-routed worker are implemented behind `EMAIL_CAMPAIGN_SEND_ENABLED=false`. Run a one-recipient test with an opted-in test contact; provider event reconciliation remains future work.
-3. Build domain onboarding, consent-aware CSV imports, suppression, templates, campaigns, operator review, scheduling, quotas and audit logs.
-4. Build provider-neutral SMS onboarding, opt-in/opt-out, compliance tests and per-country fail-closed gates. ACS SMS is not part of the initial provider lineup.
-5. Closed pilot: MKETY test domain, permission-based contacts, small batches; production smoke tests and rollback.
-6. Invite a few enterprises, monitor quotas/costs/deliverability, do recovery test, establish ACS offboarding and OCI enablement procedure.
+
+The original phase sequence has progressed. Use [the current operations status](docs/operations/development-status.md) for verified implementation state, live evidence, and the next release gates.
+
+- **Foundation and deployment:** the app and core tenant routes are implemented; Coolify reports healthy, `/readyz` passes, and the origin certificate validates. Exact deployed SHA, Ops OIDC/MFA, tenant isolation, and migration-ledger review remain open.
+- **Email pilot foundation:** ACS/OCI adapters, domain and sender workflows, consent controls, review/approval queue, and guarded worker are implemented. Test sends and campaign delivery remain disabled; provider domain/DNS, owner test, authenticated delivery events, quotas, and live delivery remain unverified.
+- **Customer operations:** templates/segments, delivery reports, usage/cost controls, export/retention, monitoring, and rollback/deliverability evidence remain incomplete.
+- **SMS, backups, and alternative runtime:** these remain separately gated. Do not enable SMS, OCI backup writes, or Workers/D1 cutover until compliance, provider registration, backup/restore, and runtime parity checks pass.
 
 ## Exclusions
 No mailbox hosting or reply inbox, no general CRM, no team/employee invitation tree, no changes to MKETY Mail, no automated marketing to imported lists without evidence of permission.
