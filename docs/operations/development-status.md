@@ -17,7 +17,7 @@ This page describes code on main separately from live operational evidence. Pass
 | Delivery events | Canonical ACS/OCI event contract, idempotent reconciliation and permanent bounce/complaint suppression. **No provider-authenticated public ingestion route or provider subscription verification exists.** Do not connect public requests directly to the reconciler. |
 | Storage and recovery | R2, Azure Blob and OCI object-storage adapters exist. No automated PostgreSQL backup and tested restore pipeline is established. |
 | SMS | Provider interface and Telnyx adapter exist; live SMS remains disabled and compliance/STOP handling is incomplete. |
-| Deployment | The production app was configured in the existing Mkety Core production environment on the shared `mkety-postgres` service, using the `campaigns` schema. The post-fix deployment failed its health check; campaign send, test-send, SMS, and OCI backup remain disabled. |
+| Deployment | The production app is deployed in the existing Mkety Core production environment on the shared `mkety-postgres` service, using schema `campaigns`. Coolify reports `running:healthy`, and the public `/readyz` route and HTTPS certificate are verified. Campaign sends, test sends, SMS, and OCI backup remain disabled. |
 
 ## Production evidence checked
 
@@ -82,4 +82,4 @@ Provisioning keeps email test sends, campaign sends, SMS, and OCI backup disable
 - [CI workflow](../../.github/workflows/ci.yml)
 - [Coolify domain workflow](../../.github/workflows/coolify-domain.yml)
 
-Repository evidence cannot confirm production health, deployed SHA, actual database ownership, DNS/TLS, provider approval, live delivery, consent quality or restore success. Treat all as unverified until observed in the target environment.
+Repository evidence alone cannot confirm production health or target-environment state. The live checks recorded above are verified; account security, provider approval, delivery, consent quality, backups, restore success, and exact deployed SHA remain open until observed in the target environment.
