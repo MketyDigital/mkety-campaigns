@@ -323,6 +323,8 @@ jobs:
             const npmCodes = [...new Set([...logs.matchAll(/npm (?:ERR!|error) code ([A-Z0-9_]{3,16})/gi)].map(match => match[1].toUpperCase()).filter(code => knownNpmCodes.has(code)))];
             const typescriptCodes = [...new Set([...logs.matchAll(/error TS(\d{4,5})/g)].map(match => 'TS' + match[1]))];
             const diagnosticLogs = logs.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\u0000/g, '');
+            const knownStartupCodes = new Set(['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','EHOSTUNREACH','EADDRNOTAVAIL','EPIPE','EACCES','EPERM','UNABLE_TO_VERIFY_LEAF_SIGNATURE','SELF_SIGNED_CERT_IN_CHAIN','DEPTH_ZERO_SELF_SIGNED_CERT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID']);
+            const startupCodes = [...new Set([...diagnosticLogs.matchAll(/\\b([A-Z][A-Z0-9_]{2,45})\\b/g)].map(match => match[1]).filter(code => knownStartupCodes.has(code)))];
             const deployedCommit = /^[0-9a-f]{7,40}$/i.test(String(detail.commit || '')) ? String(detail.commit).slice(0, 12) : null;
             console.log('Coolify failed deployment summary:', JSON.stringify({
               status: String(detail.status || 'unknown').slice(0, 40),
@@ -354,6 +356,33 @@ jobs:
             const unresolvedImports = [...new Set([...diagnosticLogs.matchAll(/Cannot find module\s+(['"])([^'"]{1,180})\1/gi)].map(match => /^[A-Za-z0-9@._:/-]+$/.test(match[2]) ? match[2] : '[nonstandard module specifier]'))];
             const typescriptLocations = [...new Set([...diagnosticLogs.matchAll(/([A-Za-z0-9_./-]+\.tsx?)\((\d{1,6}),\d+\):\s*error TS2307/g)].map(match => match[1].split('/').pop() + ':' + match[2]))];
             console.log('Deployment diagnostic categories:', JSON.stringify(categories));
+            if (startupCodes.length) console.log('Sanitized database/runtime error codes:', JSON.stringify(startupCodes));
+            if (!migrationFailures.length && (categories.length || startupCodes.length || sqlstates.length)) {
+              const targetSha = /^[0-9a-f]{40}$/i.test(String(detail.commit || '')) ? String(detail.commit) : '';
+              const category = categories.slice(0, 2).join(',') || 'unclassified';
+              const code = startupCodes[0] || sqlstates[0] || 'unclassified';
+              const listening = /MKETY Campaigns listening on http/i.test(diagnosticLogs) ? 'yes' : 'no';
+              const description = ('Startup diagnostic: category=' + category + '; code=' + code + '; listening=' + listening).slice(0, 140);
+              if (targetSha) {
+                const statusResponse = await fetch('https://api.github.com/repos/MketyDigital/mkety-campaigns/statuses/' + targetSha, {
+                  method: 'POST',
+                  headers: {
+                    authorization: 'Bearer ' + process.env.GITHUB_TOKEN,
+                    accept: 'application/vnd.github+json',
+                    'content-type': 'application/json',
+                    'x-github-api-version': '2022-11-28'
+                  },
+                  body: JSON.stringify({
+                    state: 'success',
+                    context: 'campaigns/startup-diagnostic',
+                    description,
+                    target_url: 'https://github.com/MketyDigital/mkety-campaigns/actions/runs/' + process.env.GITHUB_RUN_ID
+                  }),
+                  signal: AbortSignal.timeout(15000)
+                });
+                console.log(statusResponse.ok ? 'Sanitized startup diagnostic status published.' : 'Sanitized startup diagnostic status unavailable; HTTP ' + statusResponse.status + '.');
+              }
+            }
             if (sqlstates.length) console.log('PostgreSQL SQLSTATE codes:', JSON.stringify(sqlstates));
             if (migrationFailures.length) {
               const diagnostic = migrationFailures[0];
