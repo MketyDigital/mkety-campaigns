@@ -77,9 +77,12 @@ jobs:
             return (typeof item.real_value === 'string' && item.real_value) ||
               (typeof item.value === 'string' ? item.value : '');
           };
-          const configuredDbUrl = (() => { try { return new URL(envValue('DATABASE_URL')); } catch { return null; } })();
+          const databaseEnv = byKey('DATABASE_URL');
+          const databaseUrlValue = envValue('DATABASE_URL');
+          const configuredDbUrl = (() => { try { return new URL(databaseUrlValue); } catch { return null; } })();
           const dbEndpointFlags = value => {
-            if (!configuredDbUrl || !value) return false;
+            if (!configuredDbUrl) return null;
+            if (!value) return false;
             try {
               const endpoint = new URL(value);
               return endpoint.hostname.toLowerCase() === configuredDbUrl.hostname.toLowerCase() &&
@@ -96,7 +99,10 @@ jobs:
           console.log('Campaigns Coolify runtime environment check:', JSON.stringify({
             runtime_variable_count: runtimeEnvs.length,
             required_keys_present: Object.fromEntries(requiredRuntimeKeys.map(key => [key, Boolean(byKey(key))])),
-            database_target_is_mkety: Boolean(configuredDbUrl && decodeURIComponent(configuredDbUrl.pathname.slice(1)) === 'mkety'),
+            database_url_value_available_from_api: Boolean(databaseUrlValue),
+            database_url_is_shown_once: databaseEnv?.is_shown_once === true,
+            database_url_is_locked: databaseEnv?.is_locked === true,
+            database_target_is_mkety: configuredDbUrl ? decodeURIComponent(configuredDbUrl.pathname.slice(1)) === 'mkety' : null,
             database_url_matches_internal_endpoint: dbEndpointFlags(knownDatabase?.internal_db_url),
             database_url_matches_external_endpoint: dbEndpointFlags(knownDatabase?.external_db_url),
             database_resource_match_count: databaseMatches.length,
