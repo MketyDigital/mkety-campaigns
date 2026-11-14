@@ -301,6 +301,39 @@ jobs:
               console.log('Public health probe ' + path + ' unavailable; network_or_tls=' + (allowed.has(code) ? code : 'unclassified'));
             }
           }
+          // Temporary diagnostic: TLS is already measured separately; bypass certificate validation only for this read-only readiness probe.
+          const { request: httpsRequest } = await import('node:https');
+          const directReadyProbe = await new Promise(resolve => {
+            const request = httpsRequest({
+              hostname: '89.168.70.209',
+              port: 443,
+              path: '/readyz',
+              method: 'GET',
+              servername: 'campaign.mkety.com',
+              rejectUnauthorized: false,
+              headers: { host: 'campaign.mkety.com', accept: 'application/json' }
+            }, response => {
+              let body = '';
+              response.setEncoding('utf8');
+              response.on('data', chunk => { if (body.length < 2048) body += chunk; });
+              response.on('end', () => {
+                let appStatus = 'unrecognized';
+                try {
+                  const value = JSON.parse(body);
+                  if (value && ['ready', 'not_ready'].includes(value.status)) appStatus = value.status;
+                } catch {}
+                resolve({ http_status: response.statusCode || 0, app_status: appStatus });
+              });
+            });
+            request.on('error', error => {
+              const code = String(error?.cause?.code || error?.code || '');
+              const allowed = new Set(['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','EHOSTUNREACH','UND_ERR_CONNECT_TIMEOUT']);
+              resolve({ http_status: null, app_status: 'unavailable', network_code: allowed.has(code) ? code : 'unclassified' });
+            });
+            request.setTimeout(7000, () => request.destroy(new Error('diagnostic timeout')));
+            request.end();
+          });
+          console.log('Campaigns direct readiness diagnostic probe:', JSON.stringify(directReadyProbe));
           const deployments = await get('/deployments/applications/' + app.uuid);
           const list = Array.isArray(deployments) ? deployments : (deployments.deployments || []);
           const recent = list.slice(0, 3).map(item => ({ status: item.status, created_at: item.created_at, deployment_uuid: item.deployment_uuid }));
@@ -459,6 +492,17 @@ jobs:
               try { runtimePayload = JSON.parse(runtimeBody); }
               catch { runtimePayload = null; }
               const runtimeLogs = typeof runtimePayload?.logs === 'string' ? runtimePayload.logs : '';
+              const readinessFailures = [...runtimeLogs.matchAll(/Campaigns database connection failed:\s*(\{[^\r\n]{1,240}\})/g)]
+                .flatMap(match => {
+                  try {
+                    const value = JSON.parse(match[1]);
+                    const errorType = typeof value.errorType === 'string' && /^[A-Za-z0-9]{1,40}$/.test(value.errorType) ? value.errorType : 'unclassified';
+                    const knownCodes = new Set(['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','EHOSTUNREACH','EADDRNOTAVAIL','EPIPE','UNABLE_TO_VERIFY_LEAF_SIGNATURE','SELF_SIGNED_CERT_IN_CHAIN','DEPTH_ZERO_SELF_SIGNED_CERT','CERT_HAS_EXPIRED','ERR_TLS_CERT_ALTNAME_INVALID','28P01','3D000','42501']);
+                    const errorCode = typeof value.errorCode === 'string' && knownCodes.has(value.errorCode) ? value.errorCode : 'unclassified';
+                    return [{ errorType, errorCode }];
+                  } catch { return []; }
+                });
+              if (readinessFailures.length) console.log('Sanitized runtime readiness errors:', JSON.stringify(readinessFailures));
               const runtimeCategories = [];
               if (/28P01|password authentication failed|database authentication failed/i.test(runtimeLogs)) runtimeCategories.push('database-authentication');
               if (/ECONNREFUSED|connect timeout|ETIMEDOUT|ENOTFOUND|ECONNRESET|could not connect/i.test(runtimeLogs)) runtimeCategories.push('database-or-service-connectivity');
