@@ -187,8 +187,12 @@ jobs:
             if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(runtimeLogs)) runtimeCategories.push('authentication-configuration');
             if (/EADDRINUSE|listen EACCES|port.{0,40}(in use|unavailable|failed)/i.test(runtimeLogs)) runtimeCategories.push('port-binding');
             if (/uncaught exception|unhandled rejection|fatal error|process exited/i.test(runtimeLogs)) runtimeCategories.push('runtime-exception');
-            console.log('Sanitized runtime log summary:', JSON.stringify({ categories: runtimeCategories, listening_seen: /listening|server started/i.test(runtimeLogs), lines: runtimeLogs.split('\\n').filter(Boolean).length }));
-          } catch { console.log('Sanitized runtime log summary: unavailable'); }
+            console.log('Sanitized runtime log summary:', JSON.stringify({ categories: runtimeCategories, listening_seen: /listening|server started/i.test(runtimeLogs), lines: runtimeLogs.split(String.fromCharCode(10)).filter(Boolean).length }));
+          } catch (error) {
+            const match = String(error?.message || '').match(/HTTP ([0-9]{3})/);
+            const status = match && ['401','403','404','429','500','502'].includes(match[1]) ? match[1] : 'unknown';
+            console.log('Sanitized runtime log summary unavailable; HTTP status=' + status);
+          }
           NODE
 
       - name: Resolve manual DNS target through read-only OCI compute inventory
