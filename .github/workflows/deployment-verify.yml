@@ -203,20 +203,33 @@ jobs:
             if (categories.length === 0 && sqlstates.length === 0 && npmCodes.length === 0 && typescriptCodes.length === 0) console.log('Coolify deployment logs contained no recognized diagnostic pattern.');
           }
           try {
-            const runtime = await get('/applications/' + app.uuid + '/logs?lines=100');
-            const runtimeLogs = String(runtime.logs || '');
-            const runtimeCategories = [];
-            if (/28P01|password authentication failed|database authentication failed/i.test(runtimeLogs)) runtimeCategories.push('database-authentication');
-            if (/ECONNREFUSED|connect timeout|ETIMEDOUT|ENOTFOUND|ECONNRESET|could not connect/i.test(runtimeLogs)) runtimeCategories.push('database-or-service-connectivity');
-            if (/migration.{0,100}(failed|error|exception)|(?:failed|error|exception).{0,100}migration/i.test(runtimeLogs)) runtimeCategories.push('migration-failure');
-            if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(runtimeLogs)) runtimeCategories.push('authentication-configuration');
-            if (/EADDRINUSE|listen EACCES|port.{0,40}(in use|unavailable|failed)/i.test(runtimeLogs)) runtimeCategories.push('port-binding');
-            if (/uncaught exception|unhandled rejection|fatal error|process exited/i.test(runtimeLogs)) runtimeCategories.push('runtime-exception');
-            console.log('Sanitized runtime log summary:', JSON.stringify({ categories: runtimeCategories, listening_seen: /listening|server started/i.test(runtimeLogs), lines: runtimeLogs.split(String.fromCharCode(10)).filter(Boolean).length }));
+            const runtimeResponse = await fetch(api + '/applications/' + app.uuid + '/logs?lines=100', {
+              headers: { authorization: 'Bearer ' + token, accept: 'application/json' },
+              signal: AbortSignal.timeout(15000)
+            });
+            const runtimeContentType = runtimeResponse.headers.get('content-type') || 'unknown';
+            const runtimeBody = await runtimeResponse.text();
+            if (!runtimeResponse.ok) {
+              console.log('Runtime log endpoint response:', JSON.stringify({ http_status: runtimeResponse.status, content_type: runtimeContentType, body_bytes: Buffer.byteLength(runtimeBody) }));
+            } else {
+              let runtimePayload;
+              try { runtimePayload = JSON.parse(runtimeBody); }
+              catch { runtimePayload = null; }
+              const runtimeLogs = typeof runtimePayload?.logs === 'string' ? runtimePayload.logs : '';
+              const runtimeCategories = [];
+              if (/28P01|password authentication failed|database authentication failed/i.test(runtimeLogs)) runtimeCategories.push('database-authentication');
+              if (/ECONNREFUSED|connect timeout|ETIMEDOUT|ENOTFOUND|ECONNRESET|could not connect/i.test(runtimeLogs)) runtimeCategories.push('database-or-service-connectivity');
+              if (/migration.{0,100}(failed|error|exception)|(?:failed|error|exception).{0,100}migration/i.test(runtimeLogs)) runtimeCategories.push('migration-failure');
+              if (/(BETTER_AUTH_SECRET|MKETY_OPS_AUTH_ISSUER|ZITADEL|OIDC).{0,100}(missing|invalid|required|must|error|failed|mismatch)/i.test(runtimeLogs)) runtimeCategories.push('authentication-configuration');
+              if (/EADDRINUSE|listen EACCES|port.{0,40}(in use|unavailable|failed)/i.test(runtimeLogs)) runtimeCategories.push('port-binding');
+              if (/uncaught exception|unhandled rejection|fatal error|process exited/i.test(runtimeLogs)) runtimeCategories.push('runtime-exception');
+              console.log('Sanitized runtime log summary:', JSON.stringify({ categories: runtimeCategories, listening_seen: /listening|server started/i.test(runtimeLogs), logs_field_present: typeof runtimePayload?.logs === 'string', lines: runtimeLogs.split(String.fromCharCode(10)).filter(Boolean).length, content_type: runtimeContentType }));
+            }
           } catch (error) {
-            const match = String(error?.message || '').match(/HTTP ([0-9]{3})/);
-            const status = match && ['401','403','404','429','500','502'].includes(match[1]) ? match[1] : 'unknown';
-            console.log('Sanitized runtime log summary unavailable; HTTP status=' + status);
+            const code = String(error?.cause?.code || error?.code || 'unknown');
+            const safeCode = ['ECONNREFUSED','ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_SOCKET'].includes(code) ? code : 'unclassified';
+            const errorType = ['TypeError','SyntaxError','AbortError','Error'].includes(error?.name) ? error.name : 'unclassified';
+            console.log('Runtime log endpoint request failed:', JSON.stringify({ error_type: errorType, network_code: safeCode }));
           }
           NODE
 
