@@ -10,25 +10,32 @@ const schema = process.env.CAMPAIGNS_DB_SCHEMA?.trim() || "campaigns";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const migrationsDir = path.join(root, "migrations", "postgres");
 const pool = new Pool(getPostgresPoolOptions(process.env, 1));
+let phase = "create campaigns schema";
 
 try {
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+  phase = "set campaigns schema search path";
   await pool.query(`SET search_path TO "${schema}"`);
+  phase = "verify campaigns schema access";
   const schemaCheck = await pool.query("SELECT current_schema() AS schema");
   if (schemaCheck.rows[0]?.schema !== schema) {
     throw new Error("Campaigns database role must have USAGE and CREATE access to CAMPAIGNS_DB_SCHEMA");
   }
+  phase = "create migration ledger";
   await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  phase = "read migration ledger";
   const appliedRows = await pool.query("SELECT name FROM schema_migrations");
   const applied = new Set(appliedRows.rows.map((row) => row.name));
+  phase = "read migration files";
   const files = (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
   for (const name of files) {
     if (applied.has(name)) continue;
     const sql = await readFile(path.join(migrationsDir, name), "utf8");
     const client = await pool.connect();
+    phase = `apply migration ${name}`;
     try {
       await client.query("BEGIN");
       await client.query(sql);
@@ -42,6 +49,15 @@ try {
       client.release();
     }
   }
+} catch (error) {
+  const code = typeof error?.code === "string" && /^[A-Z0-9_]{2,32}$/.test(error.code)
+    ? error.code
+    : "unclassified";
+  const errorType = error instanceof Error && /^[A-Za-z0-9]{1,40}$/.test(error.name)
+    ? error.name
+    : "unclassified";
+  console.error("Campaigns PostgreSQL migration failed:", JSON.stringify({ phase, errorType, errorCode: code }));
+  throw new Error("Campaigns PostgreSQL migration failed; see sanitized phase and error code above.");
 } finally {
   await pool.end();
 }
