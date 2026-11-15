@@ -23,7 +23,7 @@ export interface CampaignWorkspace {
   submitForReview(tenantId: string, campaignId: string): Promise<CampaignSummary | null>;
   listCampaignsInReview(): Promise<CampaignSummary[]>;
   listApprovedCampaigns(): Promise<CampaignSummary[]>;
-  reviewCampaign(campaignId: string, reviewerUserId: string, decision: "approve" | "reject"): Promise<CampaignSummary | null>;
+  reviewCampaign(campaignId: string, reviewerUserId: string, decision: "approve" | "reject", actorType?: "user" | "ops"): Promise<CampaignSummary | null>;
   withdrawConsent(tenantId: string, contactId: string, channel: CampaignChannel): Promise<boolean>;
   unsubscribe(token: string): Promise<boolean>;
 }
