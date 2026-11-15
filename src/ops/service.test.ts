@@ -4,12 +4,12 @@ import { PostgresOperationsService } from "./service.js";
 import type { PostgresPool } from "../campaigns/repository.js";
 
 type Call={sql:string;params:unknown[]};
-function fakePool(calls:Call[]):PostgresPool {
+function fakePool(calls:Call[], resultRows:Record<string,unknown>[]=[]):PostgresPool {
   const client={
     query:async <T=Record<string,unknown>>(sql:string,params:unknown[]=[]):Promise<{rows:T[]}>=>{
       calls.push({sql,params});
       if(/^SELECT id FROM users/.test(sql)||/^SELECT id FROM tenant_invites/.test(sql))return {rows:[]};
-      return {rows:[]};
+      return {rows:resultRows as T[]};
     },
     release:()=>{},
   };
@@ -44,4 +44,32 @@ test("workspace provisioning rejects recipient limits above the enforced ceiling
   await assert.rejects(()=>service.createTenantInvite("Acme","owner@example.com",{maxCampaignRecipients:1001}));
   assert.equal(calls.some(call=>call.sql.startsWith("INSERT INTO tenants")),false);
   assert.equal(calls.at(-1)?.sql,"ROLLBACK");
+});
+
+
+test("Ops tenant overview is aggregate-only and scoped to one tenant and allowed window",async()=>{
+  const calls:Call[]=[];
+  const service=new PostgresOperationsService(fakePool(calls,[{
+    workspace_id:"tenant-1",contact_count:14,email_consented:9,sms_consented:3,
+    email_suppressed:2,sms_suppressed:1,
+    campaign_statuses:[{status:"approved",count:2}],
+    delivery_statuses:[{channel:"email",status:"delivered",count:7}],
+  }]),"https://campaign.mkety.com");
+  const overview=await service.getWorkspaceOverview?.("tenant-1",30);
+  assert.ok(overview);
+  assert.deepEqual(overview.contacts,{total:14,emailConsented:9,smsConsented:3,emailSuppressed:2,smsSuppressed:1});
+  assert.deepEqual(overview.campaignsByStatus,[{status:"approved",count:2}]);
+  assert.deepEqual(overview.deliveryByChannelStatus,[{channel:"email",status:"delivered",count:7}]);
+  const query=calls[0];
+  assert.ok(query);
+  assert.deepEqual(query.params,["tenant-1",30]);
+  assert.match(query.sql,/tenant_id\s*=\s*\$1/);
+  assert.doesNotMatch(query.sql,/contacts\.(email|phone_e164|display_name)/i);
+});
+
+test("Ops tenant overview rejects unapproved reporting windows",async()=>{
+  const calls:Call[]=[];
+  const service=new PostgresOperationsService(fakePool(calls),"https://campaign.mkety.com");
+  await assert.rejects(()=>service.getWorkspaceOverview?.("tenant-1",365),/reporting window/i);
+  assert.equal(calls.length,0);
 });
