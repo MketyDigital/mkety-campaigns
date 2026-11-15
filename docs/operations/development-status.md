@@ -21,7 +21,7 @@ This page describes code on main separately from live operational evidence. Pass
 
 ## Ops console inventory and next controls
 
-The owner successfully signed in through MKETY Auth OIDC on 2026-11-15. PR #96 (branch feat/campaign-ops-workspace-controls) adds the next control layer; it is not production until CI passes, the PR is merged, deployment is verified, and a signed-in smoke check confirms the deployed behavior.
+The owner successfully signed in through MKETY Auth OIDC on 2026-11-15. PR #96 (branch feat/campaign-ops-workspace-controls) adds the next control layer. CI passed on commit a3555fda7b7c8ea8fc06191b019affcf5e8107ca (typecheck, build, PostgreSQL migrations, auth-schema check, and tests). The branch is not production until merged, deployment is verified, and a signed-in smoke check confirms the deployed behavior.
 
 | Ops capability | Existing behavior / PR #96 |
 | --- | --- |
