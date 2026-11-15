@@ -475,6 +475,8 @@ test("MFA-enabled Ops can retrieve only aggregate tenant overview for an allowed
         contacts: { total: 12, emailConsented: 8, smsConsented: 2, emailSuppressed: 1, smsSuppressed: 0 },
         campaignsByStatus: [{ status: "approved", count: 1 }],
         deliveryByChannelStatus: [{ channel: "email", status: "delivered", count: 4 }],
+        domainReadiness: { total: 0, ready: 0, pending: 0 },
+        senderReadiness: { total: 0, ready: 0, pending: 0 },
       };
     },
   });
