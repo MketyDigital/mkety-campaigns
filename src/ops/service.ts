@@ -16,7 +16,7 @@ export interface OperationsService {
   createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning, actorId?: string): Promise<{ inviteUrl: string }>;
   acceptInvite(token: string, displayName: string, password: string): Promise<boolean>;
   listWorkspaces?(): Promise<OpsWorkspace[]>;
-  getWorkspaceOverview?(id: string, days: 7 | 30 | 90): Promise<OpsWorkspaceOverview | null>;
+  getWorkspaceOverview?(id: string, days: number): Promise<OpsWorkspaceOverview | null>;
   updateWorkspace?(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null>;
   listInvitations?(): Promise<Array<{ id: string; tenantId: string; tenantName: string; email: string; status: string; expiresAt: string; acceptedAt: string | null }>>;
   rotateInvitation?(id: string, actorId: string): Promise<{ inviteUrl: string } | null>;
@@ -73,9 +73,9 @@ export class PostgresOperationsService implements OperationsService {
     return { inviteUrl: `${this.origin}/invite/accept?token=${encodeURIComponent(token)}` };
   }
 
-  async getWorkspaceOverview(id: string, days: 7 | 30 | 90): Promise<OpsWorkspaceOverview | null> {
+  async getWorkspaceOverview(id: string, days: number): Promise<OpsWorkspaceOverview | null> {
     if (!id || id.length > 128) throw new Error("Invalid workspace id");
-    if (![7, 30, 90].includes(days)) throw new Error("Invalid reporting window");
+    if (days !== 7 && days !== 30 && days !== 90) throw new Error("Invalid reporting window");
     const result = await this.database.query<any>(
       `SELECT t.id AS workspace_id,
               (SELECT COUNT(*)::int FROM contacts c WHERE c.tenant_id=t.id) AS contact_count,
