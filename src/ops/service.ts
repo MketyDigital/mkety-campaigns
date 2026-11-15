@@ -100,6 +100,11 @@ export class PostgresOperationsService implements OperationsService {
       const updated=await client.query("UPDATE tenants SET status=$2,plan=$3,contract_reference=$4,contract_started_at=$5,expires_at=$6,max_campaign_recipients=$7,max_daily_email_recipients=$8,updated_at=NOW() WHERE id=$1 RETURNING id,name,status,plan,contract_reference,contract_started_at,expires_at,max_campaign_recipients,max_daily_email_recipients,created_at",
         [id,status,merged.plan,merged.contractReference,merged.contractStartedAt,merged.expiresAt,merged.maxCampaignRecipients,merged.maxDailyEmailRecipients]);
       if(!updated.rows[0]){await client.query("ROLLBACK");return null;}
+      const contractBlocked=status==="suspended" || new Date(merged.contractStartedAt)>new Date() || Boolean(merged.expiresAt && new Date(merged.expiresAt)<=new Date());
+      if(contractBlocked){
+        await client.query("UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.' WHERE tenant_id=$1 AND status='queued'",[id]);
+        await client.query("UPDATE campaigns SET status='in_review',updated_at=NOW() WHERE tenant_id=$1 AND status='queued'",[id]);
+      }
       await client.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'workspace_updated',$2)",[actorId,JSON.stringify({workspaceId:id,before:{status:current.status,plan:current.plan,expiresAt:current.expires_at},after:{status,...merged}})]);
       await client.query("COMMIT");
     } catch(error){await client.query("ROLLBACK");throw error;} finally{client.release();}
@@ -122,7 +127,7 @@ export class PostgresOperationsService implements OperationsService {
       const result=await client.query<{tenant_id:string;email:string}>(
         `SELECT i.tenant_id,i.email FROM tenant_invites i JOIN tenants t ON t.id=i.tenant_id
           WHERE i.id=$1 AND i.accepted_at IS NULL AND i.revoked_at IS NULL
-            AND t.status='approved' AND (t.expires_at IS NULL OR t.expires_at>NOW()) FOR UPDATE OF i`,[id]);
+            AND t.status='approved' AND t.contract_started_at<=NOW() AND (t.expires_at IS NULL OR t.expires_at>NOW()) FOR UPDATE OF i`,[id]);
       const invite=result.rows[0];if(!invite){await client.query("ROLLBACK");return null;}
       await client.query("UPDATE tenant_invites SET token_hash=$2,expires_at=NOW()+INTERVAL '7 days' WHERE id=$1",[id,tokenHash]);
       await client.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'invitation_rotated',$2)",[actorId,JSON.stringify({invitationId:id,tenantId:invite.tenant_id,email:invite.email})]);
@@ -154,7 +159,7 @@ export class PostgresOperationsService implements OperationsService {
       const lookup = await client.query<InvitationRow>(
         `SELECT id, tenant_id, email FROM tenant_invites
           WHERE token_hash = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
-            AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenant_invites.tenant_id AND t.status = 'approved' AND (t.expires_at IS NULL OR t.expires_at > NOW()))
+            AND EXISTS (SELECT 1 FROM tenants t WHERE t.id = tenant_invites.tenant_id AND t.status = 'approved' AND t.contract_started_at <= NOW() AND (t.expires_at IS NULL OR t.expires_at > NOW()))
           FOR UPDATE`, [tokenHash]);
       const invite = lookup.rows[0];
       if (!invite) { await client.query("ROLLBACK"); return false; }
