@@ -460,6 +460,54 @@ test("MFA-enabled Ops can create a one-time customer invite", async () => {
   assert.deepEqual(await response.json(), { inviteUrl: "https://campaign.mkety.com/invite/accept?token=one-time" });
 });
 
+test("MFA-enabled Ops can retrieve only aggregate tenant overview for an allowed window", async () => {
+  let requested: { id: string; days: number } | undefined;
+  const opsSession = {
+    auth: { handler: async () => new Response(), getSession: async () => ({ user: { id: "ops-1", role: "ops", twoFactorEnabled: true }, session: { createdAt: new Date() } }) },
+    resolveTenantSeat: async () => null,
+    resolveOpsAdmin: async () => true,
+  };
+  const operations = fakeOperationsService({
+    async getWorkspaceOverview(id, days) {
+      requested = { id, days };
+      return {
+        workspaceId: id, days: days as 7 | 30 | 90,
+        contacts: { total: 12, emailConsented: 8, smsConsented: 2, emailSuppressed: 1, smsSuppressed: 0 },
+        campaignsByStatus: [{ status: "approved", count: 1 }],
+        deliveryByChannelStatus: [{ channel: "email", status: "delivered", count: 4 }],
+      };
+    },
+  });
+  const app = createApp(async () => true, opsSession, fakeDomainService(), fakeCampaignWorkspace(), operations);
+  const response = await app.request("/api/ops/workspaces/tenant-safe/overview?days=30");
+  assert.equal(response.status, 200);
+  assert.deepEqual(requested, { id: "tenant-safe", days: 30 });
+  const text = await response.text();
+  assert.match(text, /emailConsented/);
+  assert.doesNotMatch(text, /@|phoneE164|bodyText|displayName/);
+});
+
+test("tenant sessions cannot read Ops aggregate overview and invalid windows are rejected", async () => {
+  let called = false;
+  const operations = fakeOperationsService({
+    async getWorkspaceOverview() { called = true; return null; },
+  });
+  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations);
+  const forbidden = await app.request("/api/ops/workspaces/tenant-safe/overview?days=30");
+  assert.equal(forbidden.status, 403);
+  assert.equal(called, false);
+
+  const opsSession = {
+    auth: { handler: async () => new Response(), getSession: async () => ({ user: { id: "ops-1", role: "ops", twoFactorEnabled: true }, session: { createdAt: new Date() } }) },
+    resolveTenantSeat: async () => null,
+    resolveOpsAdmin: async () => true,
+  };
+  const opsApp = createApp(async () => true, opsSession, fakeDomainService(), fakeCampaignWorkspace(), operations);
+  const invalid = await opsApp.request("/api/ops/workspaces/tenant-safe/overview?days=365");
+  assert.equal(invalid.status, 400);
+  assert.equal(called, false);
+});
+
 function fakeOperationsService(overrides: Partial<OperationsService> = {}): OperationsService {
   return {
     async createTenantInvite() { return { inviteUrl: "https://campaign.mkety.com/invite/accept?token=test" }; },

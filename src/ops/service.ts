@@ -4,11 +4,19 @@ import type { PostgresPool } from "../campaigns/repository.js";
 export type WorkspaceProvisioning = { plan?: "standard" | "growth" | "enterprise"; contractReference?: string; contractStartedAt?: string; expiresAt?: string | null; maxCampaignRecipients?: number; maxDailyEmailRecipients?: number };
 export type WorkspaceControls = { status: "approved" | "suspended"; plan: "standard" | "growth" | "enterprise"; contractReference: string | null; contractStartedAt: string; expiresAt: string | null; maxCampaignRecipients: number; maxDailyEmailRecipients: number };
 export type OpsWorkspace = WorkspaceControls & { id: string; name: string; ownerEmail: string | null; createdAt: string; pendingInviteCount: number };
+export type OpsWorkspaceOverview = {
+  workspaceId: string;
+  days: 7 | 30 | 90;
+  contacts: { total: number; emailConsented: number; smsConsented: number; emailSuppressed: number; smsSuppressed: number };
+  campaignsByStatus: Array<{ status: string; count: number }>;
+  deliveryByChannelStatus: Array<{ channel: string; status: string; count: number }>;
+};
 
 export interface OperationsService {
   createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning, actorId?: string): Promise<{ inviteUrl: string }>;
   acceptInvite(token: string, displayName: string, password: string): Promise<boolean>;
   listWorkspaces?(): Promise<OpsWorkspace[]>;
+  getWorkspaceOverview?(id: string, days: number): Promise<OpsWorkspaceOverview | null>;
   updateWorkspace?(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null>;
   listInvitations?(): Promise<Array<{ id: string; tenantId: string; tenantName: string; email: string; status: string; expiresAt: string; acceptedAt: string | null }>>;
   rotateInvitation?(id: string, actorId: string): Promise<{ inviteUrl: string } | null>;
@@ -63,6 +71,51 @@ export class PostgresOperationsService implements OperationsService {
       client.release();
     }
     return { inviteUrl: `${this.origin}/invite/accept?token=${encodeURIComponent(token)}` };
+  }
+
+  async getWorkspaceOverview(id: string, days: number): Promise<OpsWorkspaceOverview | null> {
+    if (!id || id.length > 128) throw new Error("Invalid workspace id");
+    if (days !== 7 && days !== 30 && days !== 90) throw new Error("Invalid reporting window");
+    const result = await this.database.query<any>(
+      `SELECT t.id AS workspace_id,
+              (SELECT COUNT(*)::int FROM contacts c WHERE c.tenant_id=t.id) AS contact_count,
+              (SELECT COUNT(*)::int FROM (
+                 SELECT DISTINCT ON (cr.contact_id) cr.contact_id,cr.state
+                 FROM consent_records cr WHERE cr.tenant_id=t.id AND cr.channel='email'
+                 ORDER BY cr.contact_id,cr.occurred_at DESC,cr.id DESC
+               ) latest WHERE latest.state='granted') AS email_consented,
+              (SELECT COUNT(*)::int FROM (
+                 SELECT DISTINCT ON (cr.contact_id) cr.contact_id,cr.state
+                 FROM consent_records cr WHERE cr.tenant_id=t.id AND cr.channel='sms'
+                 ORDER BY cr.contact_id,cr.occurred_at DESC,cr.id DESC
+               ) latest WHERE latest.state='granted') AS sms_consented,
+              (SELECT COUNT(*)::int FROM suppressions s WHERE s.tenant_id=t.id AND s.channel='email') AS email_suppressed,
+              (SELECT COUNT(*)::int FROM suppressions s WHERE s.tenant_id=t.id AND s.channel='sms') AS sms_suppressed,
+              COALESCE((SELECT jsonb_agg(jsonb_build_object('status',c.status,'count',c.campaign_count) ORDER BY c.status)
+                FROM (SELECT status,COUNT(*)::int AS campaign_count FROM campaigns WHERE tenant_id=t.id GROUP BY status) c),'[]'::jsonb) AS campaign_statuses,
+              COALESCE((SELECT jsonb_agg(jsonb_build_object('channel',d.channel,'status',d.status,'count',d.attempt_count) ORDER BY d.channel,d.status)
+                FROM (SELECT channel,status,COUNT(*)::int AS attempt_count FROM delivery_attempts
+                  WHERE tenant_id=t.id AND created_at >= NOW() - ($2::int * INTERVAL '1 day')
+                  GROUP BY channel,status) d),'[]'::jsonb) AS delivery_statuses
+         FROM tenants t WHERE t.id=$1 LIMIT 1`,
+      [id, days],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const counts = (value: unknown) => Array.isArray(value) ? value.map((item: any) => ({ ...item, count: Number(item.count) })) : [];
+    return {
+      workspaceId: row.workspace_id,
+      days,
+      contacts: {
+        total: Number(row.contact_count ?? 0),
+        emailConsented: Number(row.email_consented ?? 0),
+        smsConsented: Number(row.sms_consented ?? 0),
+        emailSuppressed: Number(row.email_suppressed ?? 0),
+        smsSuppressed: Number(row.sms_suppressed ?? 0),
+      },
+      campaignsByStatus: counts(row.campaign_statuses),
+      deliveryByChannelStatus: counts(row.delivery_statuses),
+    };
   }
 
   async listWorkspaces(): Promise<OpsWorkspace[]> {
