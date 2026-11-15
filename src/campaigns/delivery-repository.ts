@@ -60,11 +60,11 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       await client.query("BEGIN");
       const selected = await client.query<DispatchCampaignRow>(
         `SELECT c.id,c.tenant_id,c.channel,c.status,c.sender_identity_id,c.scheduled_at,
-                t.status AS tenant_status,t.expires_at,t.max_campaign_recipients,t.max_daily_email_recipients
+                t.status AS tenant_status,t.contract_started_at,t.expires_at,t.max_campaign_recipients,t.max_daily_email_recipients
            FROM campaigns c JOIN tenants t ON t.id=c.tenant_id WHERE c.id=$1 FOR UPDATE OF c,t`, [campaignId]);
       const campaign = selected.rows[0];
       assertQueueable(campaign);
-      if(campaign.tenant_status!=="approved"||(campaign.expires_at&&new Date(campaign.expires_at)<=new Date())) throw new CampaignDispatchConflictError("Workspace is suspended or expired");
+      if(campaign.tenant_status!=="approved"||new Date(campaign.contract_started_at)>new Date()||(campaign.expires_at&&new Date(campaign.expires_at)<=new Date())) throw new CampaignDispatchConflictError("Workspace is suspended or expired");
       limit=Math.min(limit,normalizeRecipientLimit(campaign.max_campaign_recipients));
       const dailyLimit=Math.min(this.dailyRecipientLimit,normalizeDailyRecipientLimit(campaign.max_daily_email_recipients));
       const sender = await client.query<{ id: string }>(
@@ -86,7 +86,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
         await client.query(
           `INSERT INTO campaign_jobs (id, tenant_id, campaign_id, contact_id, status, idempotency_key, available_at)
            VALUES ($1, $2, $3, $4, 'queued', $5, COALESCE($6, NOW()))
-           ON CONFLICT (idempotency_key) DO NOTHING`,
+           ON CONFLICT (idempotency_key) DO UPDATE SET status='queued',available_at=EXCLUDED.available_at,last_error=NULL WHERE campaign_jobs.status='cancelled'`,
           [crypto.randomUUID(), campaign.tenant_id, campaign.id, contact.id, `campaign:${campaign.id}:contact:${contact.id}`, campaign.scheduled_at]);
         await client.query(
           `INSERT INTO unsubscribe_tokens (token, tenant_id, campaign_id, contact_id)
@@ -117,6 +117,12 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       const emergencyStop = await client.query<{ email_emergency_stop: boolean }>("SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE FOR SHARE");
       if (emergencyStop.rows[0]?.email_emergency_stop !== false) { await client.query("COMMIT"); return null; }
       await client.query(
+        `UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.'
+          WHERE status='queued' AND tenant_id IN (SELECT id FROM tenants WHERE status<>'approved' OR contract_started_at>NOW() OR (expires_at IS NOT NULL AND expires_at<=NOW()))`);
+      await client.query(
+        `UPDATE campaigns SET status='in_review',updated_at=NOW()
+          WHERE status='queued' AND tenant_id IN (SELECT id FROM tenants WHERE status<>'approved' OR contract_started_at>NOW() OR (expires_at IS NOT NULL AND expires_at<=NOW()))`);
+      await client.query(
         `UPDATE campaign_jobs SET status = 'uncertain', locked_at = NULL,
              last_error = 'Worker lease expired; reconcile before retrying.'
           WHERE status = 'sending' AND locked_at < NOW() - INTERVAL '5 minutes'`);
@@ -128,7 +134,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
            JOIN campaigns c ON c.id = cj.campaign_id AND c.tenant_id = cj.tenant_id
            JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
            JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
-          JOIN tenants t ON t.id = cj.tenant_id AND t.status='approved' AND (t.expires_at IS NULL OR t.expires_at>NOW())
+          JOIN tenants t ON t.id = cj.tenant_id AND t.status='approved' AND t.contract_started_at<=NOW() AND (t.expires_at IS NULL OR t.expires_at>NOW())
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
             AND c.channel = 'email' AND si.status = 'ready'
@@ -327,7 +333,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
   }
 }
 
-type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null; tenant_status: string; expires_at: Date | string | null; max_campaign_recipients: number; max_daily_email_recipients: number };
+type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null; tenant_status: string; contract_started_at: Date | string; expires_at: Date | string | null; max_campaign_recipients: number; max_daily_email_recipients: number };
 type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; provider: "acs-email" | "oci-email-delivery"; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
 type DeliveryStateRow = { tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string };
 
