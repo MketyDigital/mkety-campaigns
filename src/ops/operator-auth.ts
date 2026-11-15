@@ -10,7 +10,7 @@ export interface OperatorAuth {
 type Env = { MKETY_OPS_AUTH_ISSUER?: string; MKETY_OPS_AUTH_CLIENT_ID?: string; MKETY_OPS_ALLOWED_EMAIL?: string; MKETY_OPS_AUTH_CALLBACK_URL?: string };
 type Discovery = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string };
 type TokenResponse = { id_token?: string };
-type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean };
+type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean; amr?: unknown };
 type Jwks = { keys?: Array<JsonWebKey & { kid?: string }> };
 const COOKIE = "mkety_campaigns_ops";
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -110,6 +110,10 @@ async function discover(issuer: string): Promise<Discovery> {
   if (normalizeIssuer(document.issuer) !== issuer) throw new Error("oidc_issuer_mismatch");
   return document;
 }
+export function hasMfaAssurance(amr: unknown): boolean {
+  return Array.isArray(amr) && amr.some((method) => method === "mfa");
+}
+
 async function verifyIdToken(token: string, jwksUri: string, issuer: string, clientId: string, nonce: string): Promise<string> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("id_token_invalid");
@@ -128,6 +132,7 @@ async function verifyIdToken(token: string, jwksUri: string, issuer: string, cli
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud], now = Math.floor(Date.now() / 1000);
   if (normalizeIssuer(claims.iss || "") !== issuer || !audience.includes(clientId) || (audience.length > 1 && claims.azp !== clientId)) throw new Error("id_token_claims_invalid");
   if (!claims.exp || claims.exp <= now || !claims.iat || claims.iat > now + 60 || claims.nonce !== nonce) throw new Error("id_token_time_or_nonce_invalid");
+  if (!hasMfaAssurance(claims.amr)) throw new Error("operator_mfa_required");
   if (claims.email_verified !== true || typeof claims.email !== "string") throw new Error("operator_email_unverified");
   return claims.email.trim().toLowerCase();
 }
