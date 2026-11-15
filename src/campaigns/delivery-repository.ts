@@ -138,13 +138,12 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
             AND c.channel = 'email' AND si.status = 'ready'
-            AND (SELECT COUNT(*) FROM campaign_jobs budget_jobs WHERE budget_jobs.campaign_id=cj.campaign_id AND budget_jobs.status IN ('queued','sending','accepted')) <= t.max_campaign_recipients
-            AND EXISTS (SELECT 1 FROM tenant_daily_email_reservations r WHERE r.tenant_id=t.id AND r.day_utc=(NOW() AT TIME ZONE 'UTC')::date AND r.reserved_count<=LEAST(t.max_daily_email_recipients,$1))
+            AND (SELECT COUNT(*) FROM campaign_jobs budget_jobs WHERE budget_jobs.campaign_id=cj.campaign_id AND budget_jobs.status IN ('queued','sending','accepted','uncertain')) <= t.max_campaign_recipients
             AND NOT EXISTS (SELECT 1 FROM campaign_provider_throttle_slots ts WHERE ts.provider=si.provider AND ts.next_allowed_at>NOW())
             AND ${activeConsentSql("cj", "ct")}
             AND NOT EXISTS (SELECT 1 FROM suppressions sp WHERE sp.tenant_id = cj.tenant_id AND sp.channel = 'email' AND sp.address_normalized = LOWER(ct.email))
           ORDER BY cj.available_at, cj.created_at
-          FOR UPDATE OF cj SKIP LOCKED LIMIT 1`, [this.dailyRecipientLimit]);
+          FOR UPDATE OF cj SKIP LOCKED LIMIT 1`);
       const row = result.rows[0];
       if (!row) {
         await finalizeCampaigns(client);
