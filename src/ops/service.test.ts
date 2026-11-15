@@ -4,12 +4,14 @@ import { PostgresOperationsService } from "./service.js";
 import type { PostgresPool } from "../campaigns/repository.js";
 
 type Call={sql:string;params:unknown[]};
-function fakePool(calls:Call[], resultRows:Record<string,unknown>[]=[]):PostgresPool {
+function fakePool(calls:Call[], resultRows:Record<string,unknown>[] = [], followingResults:Record<string,unknown>[][] = []):PostgresPool {
+  let resultIndex=0;
   const client={
     query:async <T=Record<string,unknown>>(sql:string,params:unknown[]=[]):Promise<{rows:T[]}>=>{
       calls.push({sql,params});
       if(/^SELECT id FROM users/.test(sql)||/^SELECT id FROM tenant_invites/.test(sql))return {rows:[]};
-      return {rows:resultRows as T[]};
+      const rows=resultIndex===0?resultRows:(followingResults[resultIndex-1]??[]);resultIndex++;
+      return {rows:rows as T[]};
     },
     release:()=>{},
   };
@@ -60,12 +62,37 @@ test("Ops tenant overview is aggregate-only and scoped to one tenant and allowed
   assert.deepEqual(overview.contacts,{total:14,emailConsented:9,smsConsented:3,emailSuppressed:2,smsSuppressed:1});
   assert.deepEqual(overview.campaignsByStatus,[{status:"approved",count:2}]);
   assert.deepEqual(overview.deliveryByChannelStatus,[{channel:"email",status:"delivered",count:7}]);
+  assert.deepEqual(overview.domainReadiness,{total:0,ready:0,pending:0});
+  assert.deepEqual(overview.senderReadiness,{total:0,ready:0,pending:0});
   const query=calls[0];
   assert.ok(query);
   assert.deepEqual(query.params,["tenant-1",30]);
   assert.match(query.sql,/WHERE t\.id=\$1/);
   assert.match(query.sql,/tenant_id=t\.id/);
   assert.doesNotMatch(query.sql,/contacts\.(email|phone_e164|display_name)/i);
+});
+
+
+test("Ops tenant readiness counts verified domains and ready senders without returning identifiers or DNS material",async()=>{
+  const calls:Call[]=[];
+  const domains=[
+    {provisioning_state:"Succeeded",linked:true,verification_records_json:'{"spf":{"token":"dns-secret"}}',verification_states_json:'{"spf":{"status":"Verified"}}'},
+    {provisioning_state:"Succeeded",linked:false,verification_records_json:'{"dkim":{"token":"other-secret"}}',verification_states_json:'{"dkim":{"status":"Pending"}}'},
+  ];
+  const service=new PostgresOperationsService(fakePool(calls,[{
+    workspace_id:"tenant-1",contact_count:0,email_consented:0,sms_consented:0,email_suppressed:0,sms_suppressed:0,
+    campaign_statuses:[],delivery_statuses:[],
+  }],[domains,[{status:"ready",count:"1"},{status:"pending",count:"1"}]]),"https://campaign.mkety.com");
+  const overview=await service.getWorkspaceOverview?.("tenant-1",7);
+  assert.ok(overview);
+  assert.deepEqual(overview.domainReadiness,{total:2,ready:1,pending:1});
+  assert.deepEqual(overview.senderReadiness,{total:2,ready:1,pending:1});
+  const serialized=JSON.stringify(overview);
+  assert.doesNotMatch(serialized,/dns-secret|other-secret|domain_name|sender_address/i);
+  assert.match(calls[1]?.sql??"",/tenant_id=\$1/);
+  assert.doesNotMatch(calls[1]?.sql??"",/domain_name/);
+  assert.match(calls[2]?.sql??"",/tenant_id=\$1/);
+  assert.doesNotMatch(calls[2]?.sql??"",/sender_address|display_name/i);
 });
 
 test("Ops tenant overview rejects unapproved reporting windows",async()=>{

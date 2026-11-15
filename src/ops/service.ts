@@ -10,6 +10,8 @@ export type OpsWorkspaceOverview = {
   contacts: { total: number; emailConsented: number; smsConsented: number; emailSuppressed: number; smsSuppressed: number };
   campaignsByStatus: Array<{ status: string; count: number }>;
   deliveryByChannelStatus: Array<{ channel: string; status: string; count: number }>;
+  domainReadiness: { total: number; ready: number; pending: number };
+  senderReadiness: { total: number; ready: number; pending: number };
 };
 
 export interface OperationsService {
@@ -102,6 +104,21 @@ export class PostgresOperationsService implements OperationsService {
     );
     const row = result.rows[0];
     if (!row) return null;
+    const [domainResult, senderResult] = await Promise.all([
+      this.database.query<any>(
+        "SELECT provisioning_state,linked,verification_records_json,verification_states_json FROM tenant_email_domains WHERE tenant_id=$1",
+        [id],
+      ),
+      this.database.query<any>(
+        "SELECT status,COUNT(*)::int AS count FROM tenant_sender_identities WHERE tenant_id=$1 GROUP BY status ORDER BY status",
+        [id],
+      ),
+    ]);
+    const domains = domainResult.rows;
+    const readyDomains = domains.filter(isReadyOpsDomain).length;
+    const senderCounts = new Map<string, number>(senderResult.rows.map((item:any) => [item.status, Number(item.count)]));
+    const readySenders = senderCounts.get("ready") ?? 0;
+    const totalSenders = [...senderCounts.values()].reduce((sum,count) => sum + count, 0);
     const counts = (value: unknown) => Array.isArray(value) ? value.map((item: any) => ({ ...item, count: Number(item.count) })) : [];
     return {
       workspaceId: row.workspace_id,
@@ -115,6 +132,8 @@ export class PostgresOperationsService implements OperationsService {
       },
       campaignsByStatus: counts(row.campaign_statuses),
       deliveryByChannelStatus: counts(row.delivery_statuses),
+      domainReadiness: { total: domains.length, ready: readyDomains, pending: domains.length - readyDomains },
+      senderReadiness: { total: totalSenders, ready: readySenders, pending: totalSenders - readySenders },
     };
   }
 
@@ -259,6 +278,19 @@ export class PostgresOperationsService implements OperationsService {
   }
 }
 
+
+function isReadyOpsDomain(row: { provisioning_state?: unknown; linked?: unknown; verification_records_json?: unknown; verification_states_json?: unknown }): boolean {
+  if (row.linked !== true || row.provisioning_state !== "Succeeded") return false;
+  try {
+    const records = typeof row.verification_records_json === "string" ? JSON.parse(row.verification_records_json) : row.verification_records_json;
+    const states = typeof row.verification_states_json === "string" ? JSON.parse(row.verification_states_json) : row.verification_states_json;
+    if (!records || typeof records !== "object" || !states || typeof states !== "object") return false;
+    const types = Object.keys(records as Record<string, unknown>);
+    return types.length > 0 && types.every((type) => (states as Record<string, { status?: unknown }>)[type]?.status === "Verified");
+  } catch {
+    return false;
+  }
+}
 
 function validateProvisioning(settings: WorkspaceProvisioning): Required<Pick<WorkspaceControls,"plan"|"contractReference"|"contractStartedAt"|"expiresAt"|"maxCampaignRecipients"|"maxDailyEmailRecipients">> {
   const plan=settings.plan??"standard";
