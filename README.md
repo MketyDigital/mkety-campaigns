@@ -1,6 +1,6 @@
 # MKETY Campaigns — Standalone Architecture & Roadmap
 
-Status: production deployment is healthy and the owner reports a successful Ops OIDC login; campaign sending remains disabled. Ops workspace and contract controls are proposed in PR #96 and require CI, merge, deployment, and smoke verification. Owner: MKETY Ops. Updated: 2026-11-15.
+Status: production deployment is healthy and the owner reports a successful Ops OIDC login; campaign sending remains disabled. Ops workspace and contract controls are proposed in PR #96; CI passes, while merge, deployment, and smoke verification remain. Owner: MKETY Ops. Updated: 2026-11-15.
 
 **Current implementation and production gates:** [Development status and pilot readiness](docs/operations/development-status.md).
 
