@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Script } from "node:vm";
 import { createApp } from "./app.js";
 import type { TenantDomainService, TenantEmailDomain } from "./domains/service.js";
 import type { CampaignWorkspace } from "./campaigns/workspace.js";
@@ -507,4 +508,27 @@ test("security headers prevent browser caching of authenticated and authenticati
   const publicResponse = await app.request("/healthz");
   assert.equal(publicResponse.headers.get("cache-control"), null);
   assert.equal(publicResponse.headers.get("x-content-type-options"), "nosniff");
+});
+
+
+test("Ops dashboard renders workspace controls with syntactically valid client code", async () => {
+  const operatorAuth = {
+    start: async () => new Response(null, { status: 302 }),
+    callback: async () => new Response(null, { status: 302 }),
+    session: async () => ({ id: "ops-user-id", email: "ops@example.com" }),
+    logout: async () => new Response(null, { status: 302 }),
+  };
+  const security = {
+    auth: activeSession.auth,
+    resolveTenantSeat: activeSession.resolveTenantSeat,
+    operatorAuth,
+  };
+  const response = await createApp(undefined, security).request("/app/ops");
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Contract expires/);
+  assert.match(html, /Rotate link/);
+  const script = html.match(/<script>([\\s\\S]*?)<\\/script>/);
+  assert.ok(script, "Ops dashboard should contain its UI script");
+  assert.doesNotThrow(() => new Script(script[1]));
 });
