@@ -654,7 +654,7 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
     if (!campaignDispatch) return c.json({ error: "campaign_dispatch_not_configured" }, 503);
     if (campaignDispatch.isEmergencyStopActive && await campaignDispatch.isEmergencyStopActive()) return c.json({ error: "email_emergency_stop_active" }, 503);
     try {
-      const queued = await campaignDispatch.queueApproved(c.req.param("id"), c.get("opsUserId"), campaignRecipientLimit);
+      const queued = await campaignDispatch.queueApproved(c.req.param("id"), c.get("opsUserId"), campaignRecipientLimit, "ops");
       return c.json({ queued, status: "queued" }, 202);
     } catch (error) {
       if (error instanceof CampaignDispatchConflictError) return c.json({ error: "campaign_not_queueable", message: error.message }, 409);
