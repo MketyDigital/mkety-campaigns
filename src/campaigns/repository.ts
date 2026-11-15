@@ -100,21 +100,24 @@ export class PostgresCampaignWorkspace implements CampaignWorkspace {
     return result.rows.map(mapCampaign);
   }
 
-  async reviewCampaign(campaignId: string, reviewerUserId: string, decision: "approve" | "reject"): Promise<CampaignSummary | null> {
+  async reviewCampaign(campaignId: string, reviewerUserId: string, decision: "approve" | "reject", actorType: "user" | "ops" = "user"): Promise<CampaignSummary | null> {
     const status = decision === "approve" ? "approved" : "rejected";
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
       const result = await client.query<CampaignRow>(
-        `UPDATE campaigns SET status = $2, approved_by = CASE WHEN $2 = 'approved' THEN $3 ELSE NULL END, updated_at = NOW()
+        `UPDATE campaigns SET status = $2, approved_by = CASE WHEN $2 = 'approved' AND $4 = 'user' THEN $3 ELSE NULL END, updated_at = NOW()
           WHERE id = $1 AND status = 'in_review'
           RETURNING id, tenant_id, channel, status, sender_identity_id, subject, body_html, body_text, scheduled_at, created_at`,
-        [campaignId, status, reviewerUserId]);
+        [campaignId, status, reviewerUserId, actorType]);
       const row = result.rows[0];
       if (row) await client.query(
         `INSERT INTO audit_log (id, tenant_id, actor_user_id, action, target_type, target_id, metadata_json)
          VALUES ($1, $2, $3, $4, 'campaign', $5, $6)`,
-        [crypto.randomUUID(), row.tenant_id, reviewerUserId, auditAction(decision), campaignId, JSON.stringify({ deliveryQueued: false })]);
+        [crypto.randomUUID(), row.tenant_id, actorType === 'ops' ? null : reviewerUserId, auditAction(decision), campaignId, JSON.stringify({ deliveryQueued: false })]);
+      if(row && actorType==='ops') await client.query(
+        `INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,$2,$3)`,
+        [reviewerUserId, `campaign_${decision}`, JSON.stringify({tenantId:row.tenant_id,campaignId})]);
       await client.query("COMMIT");
       return row ? mapCampaign(row) : null;
     } catch (error) {
