@@ -67,7 +67,8 @@ export function createOperatorAuth(database: Pool, env: Env): OperatorAuth {
         }
         const email = resolveVerifiedOperatorEmail(claims, userInfo);
         if (email !== config.allowedEmail) throw new Error("operator_not_allowed");
-        const operator = await database.query<{ id: string }>("INSERT INTO campaign_ops_users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET last_login_at=NOW(), status='active' RETURNING id", [email]);
+        const operator = await database.query<{ id: string }>("INSERT INTO campaign_ops_users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET last_login_at=NOW() WHERE campaign_ops_users.status='active' RETURNING id", [email]);
+        if (!operator.rows[0]) throw new Error("operator_disabled");
         const token = randomToken(32);
         await database.query("INSERT INTO campaign_ops_sessions (token_hash,user_id,expires_at) VALUES ($1,$2,NOW() + INTERVAL '12 hours')", [await sha256(token), operator.rows[0]!.id]);
         return new Response(null, { status: 302, headers: { location: new URL("/app/ops", callback).toString(), "set-cookie": sessionCookie(token, SESSION_SECONDS), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
