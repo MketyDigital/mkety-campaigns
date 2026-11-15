@@ -6,7 +6,7 @@ export type WorkspaceControls = { status: "approved" | "suspended"; plan: "stand
 export type OpsWorkspace = WorkspaceControls & { id: string; name: string; ownerEmail: string | null; createdAt: string; pendingInviteCount: number };
 
 export interface OperationsService {
-  createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning): Promise<{ inviteUrl: string }>;
+  createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning, actorId?: string): Promise<{ inviteUrl: string }>;
   acceptInvite(token: string, displayName: string, password: string): Promise<boolean>;
   listWorkspaces?(): Promise<OpsWorkspace[]>;
   updateWorkspace?(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null>;
@@ -27,7 +27,7 @@ export class PostgresOperationsService implements OperationsService {
     this.origin = url.origin;
   }
 
-  async createTenantInvite(tenantName: string, email: string, settings: WorkspaceProvisioning = {}): Promise<{ inviteUrl: string }> {
+  async createTenantInvite(tenantName: string, email: string, settings: WorkspaceProvisioning = {}, actorId?: string): Promise<{ inviteUrl: string }> {
     const name = tenantName.trim();
     const normalizedEmail = normalizeEmail(email);
     if (!name || name.length > 160) throw new Error("Tenant name must contain 1 to 160 characters");
@@ -47,8 +47,8 @@ export class PostgresOperationsService implements OperationsService {
         "INSERT INTO tenants (id,name,status,plan,contract_reference,contract_started_at,expires_at,max_campaign_recipients,max_daily_email_recipients) VALUES ($1,$2,'approved',$3,$4,$5,$6,$7,$8)",
         [tenantId, name, limits.plan, limits.contractReference, limits.contractStartedAt, limits.expiresAt, limits.maxCampaignRecipients, limits.maxDailyEmailRecipients]);
       await client.query(
-        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES (NULL,'workspace_created',$1)",
-        [JSON.stringify({ tenantId, name, ownerEmail: normalizedEmail, ...limits })]);
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'workspace_created',$2)",
+        [actorId ?? null, JSON.stringify({ tenantId, name, ownerEmail: normalizedEmail, ...limits })]);
       await client.query(
         `INSERT INTO tenant_invites (id, tenant_id, email, token_hash, expires_at)
          VALUES ($1, $2, $3, $4, NOW() + INTERVAL '7 days')`,
