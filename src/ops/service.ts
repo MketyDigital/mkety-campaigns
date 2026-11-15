@@ -103,7 +103,8 @@ export class PostgresOperationsService implements OperationsService {
         [id,status,merged.plan,merged.contractReference,merged.contractStartedAt,merged.expiresAt,merged.maxCampaignRecipients,merged.maxDailyEmailRecipients]);
       if(!updated.rows[0]){await client.query("ROLLBACK");return null;}
       const contractBlocked=status==="suspended" || new Date(merged.contractStartedAt)>new Date() || Boolean(merged.expiresAt && new Date(merged.expiresAt)<=new Date());
-      if(contractBlocked){
+      const limitsReduced=merged.maxCampaignRecipients<current.max_campaign_recipients || merged.maxDailyEmailRecipients<current.max_daily_email_recipients;
+      if(contractBlocked||limitsReduced){
         await client.query("UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.' WHERE tenant_id=$1 AND status='queued'",[id]);
         await client.query("UPDATE campaigns SET status='in_review',updated_at=NOW() WHERE tenant_id=$1 AND status='queued'",[id]);
       }
