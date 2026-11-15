@@ -67,8 +67,9 @@ export class PostgresOperationsService implements OperationsService {
     const result = await this.database.query<any>(
       `SELECT t.id,t.name,t.status,t.plan,t.contract_reference,t.contract_started_at,t.expires_at,
               t.max_campaign_recipients,t.max_daily_email_recipients,t.created_at,
-              (SELECT u.email FROM tenant_seats s JOIN users u ON u.id=s.user_id
-                WHERE s.tenant_id=t.id AND s.status IN ('active','invited') ORDER BY s.created_at LIMIT 1) AS owner_email,
+              (SELECT COALESCE((SELECT u.email FROM tenant_seats s JOIN users u ON u.id=s.user_id
+                WHERE s.tenant_id=t.id AND s.status IN ('active','invited') ORDER BY s.created_at LIMIT 1),
+                (SELECT i.email FROM tenant_invites i WHERE i.tenant_id=t.id ORDER BY i.created_at DESC LIMIT 1)) AS owner_email,
               (SELECT COUNT(*)::int FROM tenant_invites i WHERE i.tenant_id=t.id AND i.accepted_at IS NULL
                 AND i.revoked_at IS NULL AND i.expires_at>NOW()) AS pending_invite_count
          FROM tenants t ORDER BY t.created_at DESC LIMIT 500`);
@@ -131,11 +132,14 @@ export class PostgresOperationsService implements OperationsService {
   }
 
   async revokeInvitation(id: string, actorId: string): Promise<boolean> {
-    const result=await this.database.query<{tenant_id:string;email:string}>(
-      "UPDATE tenant_invites SET revoked_at=NOW() WHERE id=$1 AND accepted_at IS NULL AND revoked_at IS NULL RETURNING tenant_id,email",[id]);
-    const invite=result.rows[0];if(!invite)return false;
-    await this.database.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'invitation_revoked',$2)",[actorId,JSON.stringify({invitationId:id,tenantId:invite.tenant_id,email:invite.email})]);
-    return true;
+    const client=await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      const result=await client.query<{tenant_id:string;email:string}>("UPDATE tenant_invites SET revoked_at=NOW() WHERE id=$1 AND accepted_at IS NULL AND revoked_at IS NULL RETURNING tenant_id,email",[id]);
+      const invite=result.rows[0];if(!invite){await client.query("ROLLBACK");return false;}
+      await client.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'invitation_revoked',$2)",[actorId,JSON.stringify({invitationId:id,tenantId:invite.tenant_id,email:invite.email})]);
+      await client.query("COMMIT");return true;
+    } catch(error){await client.query("ROLLBACK");throw error;} finally{client.release();}
   }
 
   async acceptInvite(token: string, displayName: string, password: string): Promise<boolean> {
