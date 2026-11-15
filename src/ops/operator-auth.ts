@@ -119,6 +119,7 @@ async function discover(issuer: string): Promise<Discovery> {
   for (const field of ["issuer", "authorization_endpoint", "token_endpoint", "jwks_uri"] as const) {
     if (typeof document[field] !== "string" || new URL(document[field]).protocol !== "https:") throw new Error("oidc_discovery_invalid");
   }
+  if (document.userinfo_endpoint !== undefined && (typeof document.userinfo_endpoint !== "string" || new URL(document.userinfo_endpoint).protocol !== "https:")) throw new Error("oidc_discovery_invalid");
   if (normalizeIssuer(document.issuer) !== issuer) throw new Error("oidc_issuer_mismatch");
   return document;
 }
