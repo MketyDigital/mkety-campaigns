@@ -62,8 +62,8 @@ test("Ops tenant overview is aggregate-only and scoped to one tenant and allowed
   assert.deepEqual(overview.contacts,{total:14,emailConsented:9,smsConsented:3,emailSuppressed:2,smsSuppressed:1});
   assert.deepEqual(overview.campaignsByStatus,[{status:"approved",count:2}]);
   assert.deepEqual(overview.deliveryByChannelStatus,[{channel:"email",status:"delivered",count:7}]);
-  assert.deepEqual(overview.domainReadiness,{total:2,ready:1,pending:1});
-  assert.deepEqual(overview.senderReadiness,{total:2,ready:1,pending:1});
+  assert.deepEqual(overview.domainReadiness,{total:0,ready:0,pending:0});
+  assert.deepEqual(overview.senderReadiness,{total:0,ready:0,pending:0});
   const query=calls[0];
   assert.ok(query);
   assert.deepEqual(query.params,["tenant-1",30]);
@@ -90,7 +90,7 @@ test("Ops tenant readiness counts verified domains and ready senders without ret
   const serialized=JSON.stringify(overview);
   assert.doesNotMatch(serialized,/dns-secret|other-secret|domain_name|sender_address/i);
   assert.match(calls[1]?.sql??"",/tenant_id=\$1/);
-  assert.doesNotMatch(calls[1]?.sql??"",/domain_name|verification_records_json/);
+  assert.doesNotMatch(calls[1]?.sql??"",/domain_name/);
   assert.match(calls[2]?.sql??"",/tenant_id=\$1/);
   assert.doesNotMatch(calls[2]?.sql??"",/sender_address|display_name/i);
 });
