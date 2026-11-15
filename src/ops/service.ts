@@ -38,6 +38,8 @@ export class PostgresOperationsService implements OperationsService {
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [normalizedEmail]);
+      await client.query("UPDATE tenant_invites SET revoked_at=NOW() WHERE lower(email)=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at<=NOW()", [normalizedEmail]);
       const existing = await client.query("SELECT id FROM users WHERE lower(email) = $1 LIMIT 1", [normalizedEmail]);
       if (existing.rows.length) throw new Error("This email already has an account");
       const pending = await client.query("SELECT id FROM tenant_invites WHERE lower(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW() LIMIT 1", [normalizedEmail]);
@@ -67,7 +69,7 @@ export class PostgresOperationsService implements OperationsService {
     const result = await this.database.query<any>(
       `SELECT t.id,t.name,t.status,t.plan,t.contract_reference,t.contract_started_at,t.expires_at,
               t.max_campaign_recipients,t.max_daily_email_recipients,t.created_at,
-              (SELECT COALESCE((SELECT u.email FROM tenant_seats s JOIN users u ON u.id=s.user_id
+              COALESCE((SELECT u.email FROM tenant_seats s JOIN users u ON u.id=s.user_id
                 WHERE s.tenant_id=t.id AND s.status IN ('active','invited') ORDER BY s.created_at LIMIT 1),
                 (SELECT i.email FROM tenant_invites i WHERE i.tenant_id=t.id ORDER BY i.created_at DESC LIMIT 1)) AS owner_email,
               (SELECT COUNT(*)::int FROM tenant_invites i WHERE i.tenant_id=t.id AND i.accepted_at IS NULL
