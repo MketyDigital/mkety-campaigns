@@ -528,7 +528,7 @@ test("Ops dashboard renders workspace controls with syntactically valid client c
   const html = await response.text();
   assert.match(html, /Contract expires/);
   assert.match(html, /Rotate link/);
-  const script = html.match(/<script>([\\s\\S]*?)<\\/script>/);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(script, "Ops dashboard should contain its UI script");
   assert.doesNotThrow(() => new Script(script[1]));
 });
