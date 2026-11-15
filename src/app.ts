@@ -667,7 +667,7 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
     const payload = await c.req.json().catch(() => null) as { decision?: unknown } | null;
     if (payload?.decision !== "approve" && payload?.decision !== "reject") return c.json({ error: "campaign_review_decision_invalid" }, 400);
     try {
-      const campaign = await workspace.reviewCampaign(c.req.param("id"), c.get("opsUserId"), payload.decision);
+      const campaign = await workspace.reviewCampaign(c.req.param("id"), c.get("opsUserId"), payload.decision, "ops");
       return campaign ? c.json({ campaign, deliveryQueued: false }) : c.json({ error: "campaign_not_found_or_not_in_review" }, 409);
     } catch {
       return c.json({ error: "campaign_review_failed" }, 500);
