@@ -11,7 +11,9 @@ ALTER TABLE tenants
   ADD CONSTRAINT tenants_campaign_limit_valid CHECK (max_campaign_recipients BETWEEN 1 AND 1000),
   ADD CONSTRAINT tenants_daily_limit_valid CHECK (max_daily_email_recipients BETWEEN 1 AND 100000);
 
-ALTER TABLE tenant_invites ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+ALTER TABLE tenant_invites
+  ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS tenants_expiration_status_idx ON tenants(status, expires_at);
 CREATE INDEX IF NOT EXISTS tenant_invites_pending_idx ON tenant_invites(tenant_id, expires_at) WHERE accepted_at IS NULL AND revoked_at IS NULL;
 
