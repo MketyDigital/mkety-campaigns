@@ -634,7 +634,7 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
         expiresAt: payload.expiresAt as string|null|undefined,
         maxCampaignRecipients: payload.maxCampaignRecipients as number|undefined,
         maxDailyEmailRecipients: payload.maxDailyEmailRecipients as number|undefined,
-      });
+      }, c.get("opsUserId"));
       return c.json(result, 201);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
