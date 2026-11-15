@@ -101,6 +101,7 @@ const app = createApp(async () => {
          JOIN tenants t ON t.id = s.tenant_id
          JOIN users u ON u.id = s.user_id
         WHERE s.user_id = $1 AND s.status = 'active' AND t.status = 'approved'
+          AND t.contract_started_at <= NOW() AND (t.expires_at IS NULL OR t.expires_at > NOW())
           AND u.mfa_enrolled_at IS NOT NULL AND $2::timestamptz >= u.mfa_enrolled_at
         LIMIT 1`,
       [userId, sessionCreatedAt],

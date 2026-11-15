@@ -1,6 +1,6 @@
 # MKETY Campaigns: implementation status, roadmap, and pilot gates
 
-**Audit date:** 2026-11-14. **Status:** production app is deployed and healthy on Coolify. The database-backed `/readyz` check, public routes, DNS A record, and origin TLS certificate are verified. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
+**Audit date:** 2026-11-15. **Status:** production app is deployed and healthy on Coolify. The database-backed `/readyz` check, public routes, DNS A record, and origin TLS certificate are verified. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
 
 This page describes code on main separately from live operational evidence. Passing CI or merging code proves neither successful deployment nor safe live delivery. The 2026-10-29 design and 2026-10-30 implementation plan remain historical intent.
 
@@ -19,6 +19,22 @@ This page describes code on main separately from live operational evidence. Pass
 | SMS | Provider interface and Telnyx adapter exist; live SMS remains disabled and compliance/STOP handling is incomplete. |
 | Deployment | The production app is deployed in the existing Mkety Core production environment on the shared `mkety-postgres` service, using schema `campaigns`. Coolify reports `running:healthy`, and the public `/readyz` route and HTTPS certificate are verified. Campaign sends, test sends, SMS, and OCI backup remain disabled. |
 
+## Ops console inventory and next controls
+
+The owner successfully signed in through MKETY Auth OIDC on 2026-11-15. PR #96 (branch feat/campaign-ops-workspace-controls) adds the next control layer. CI passed on commit a3555fda7b7c8ea8fc06191b019affcf5e8107ca (typecheck, build, PostgreSQL migrations, auth-schema check, and tests). The branch is not production until merged, deployment is verified, and a signed-in smoke check confirms the deployed behavior.
+
+| Ops capability | Existing behavior / PR #96 |
+| --- | --- |
+| Operator identity | OIDC PKCE, verified allowlisted email, app-local hashed session, secure cookie, disabled-operator enforcement. One allowlisted operator; no role or operator-management UI. |
+| Workspace provisioning | Create tenant and its single owner seat invitation. Contract start/expiry, plan/reference, per-campaign and per-day email limits are added in PR #96. |
+| Workspace lifecycle | List workspaces; set approved/suspended, plan, contract dates/reference, and caps. Expiry/status block tenant access and dispatch. Suspension, expiry, future start, or lower caps cancel queued jobs and move campaigns back to review. |
+| Owner invites | Single-use seven-day invite with hashed token storage. PR #96 adds invitation status list, one-time link rotation and revocation. No extra employee/team seats. |
+| Campaign operations | Review/approve/reject without sending; explicit email queue action; global email emergency stop. Ops actor actions go to campaign_ops_audit; email send/test-send runtime gates remain off. SMS dispatch remains disabled. |
+| Customer setup | Tenants manage their own contacts/consent, domains, sender identities, and campaign drafts. Ops does not currently have customer impersonation, contact editing, or sender/domain override controls. |
+| Reporting and audit | Campaign queue/review and global runtime status only. No Ops usage/cost/delivery dashboard or searchable audit-log UI yet. Audit records are persisted. |
+
+Next Ops product work after PR #96: add tenant detail/search with usage and delivery outcome summaries; expose read-only domain/sender readiness and consent/suppression status; add campaign and invite history filters plus audit-log search; provide a safe owner-seat transfer/recovery workflow that revokes sessions and requires MFA re-enrollment. Keep customer contact data and consent evidence tenant-scoped; do not add impersonation or destructive data deletion as routine Ops actions.
+
 ## Production evidence checked
 
 The latest post-deploy verification (2026-11-14, workflow run 45) reports the Coolify app as `running:healthy`. Coolify is configured to check the database-backed `/readyz` route over HTTP on port 3000, with a 180-second start period, 10-second interval, 5-second timeout, and six retries. Public `/healthz` returned HTTP 200 with `ok`; public `/readyz` returned HTTP 200 with `ready`. The deployment ran the app's `start:production` command, which applies PostgreSQL migrations before starting the server. Runtime readiness confirms live PostgreSQL connectivity; the migration ledger and schema isolation still need a separate review.
@@ -35,7 +51,7 @@ Provisioning keeps email test sends, campaign sends, SMS, and OCI backup disable
 
 - [x] Confirm one Coolify app is configured for this repository's `main` branch, Dockerfile build, root context, HTTPS domain, and port 3000. The API reports deployed SHA as `HEAD`; verify the exact deployed commit if release traceability is required.
 - [ ] Review the `campaigns` migration ledger and schema isolation on the existing `mkety` logical database in `mkety-postgres`. The runtime `/readyz` query succeeds, but this does not replace a migration/grant review.
-- [ ] Complete the first allowlisted Ops OIDC login. The custom OIDC flow creates its operator record after a successful callback; do not use the separate Better Auth bootstrap script for this flow. Confirm Zitadel redirects back to the configured callback and that the returned verified email matches `MKETY_OPS_ALLOWED_EMAIL`. Zitadel's sign-in policy controls which authentication factors are required.
+- [x] Complete the first allowlisted Ops OIDC login; the owner reports the login succeeded on 2026-11-15. The custom OIDC callback created its operator record; the separate Better Auth bootstrap script is not used. Zitadel remains responsible for the authentication factors applied during sign-in.
 - [x] Confirm runtime email test sends, campaign sends, SMS, and OCI backup remain disabled.
 - [x] Create and verify the `campaign.mkety.com` A record to `89.168.70.209`; public DNS returns one matching IPv4 record and no IPv6 record.
 - [x] Verify a valid origin certificate for `campaign.mkety.com`; TLS validation succeeds and the certificate SAN matches the domain.
