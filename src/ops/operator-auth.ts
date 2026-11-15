@@ -8,9 +8,10 @@ export interface OperatorAuth {
   logout(headers: Headers): Promise<Response>;
 }
 type Env = { MKETY_OPS_AUTH_ISSUER?: string; MKETY_OPS_AUTH_CLIENT_ID?: string; MKETY_OPS_ALLOWED_EMAIL?: string; MKETY_OPS_AUTH_CALLBACK_URL?: string };
-type Discovery = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string };
-type TokenResponse = { id_token?: string };
-type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean; amr?: unknown };
+type Discovery = { issuer: string; authorization_endpoint: string; token_endpoint: string; jwks_uri: string; userinfo_endpoint?: string };
+type TokenResponse = { id_token?: string; access_token?: string };
+type Claims = { iss?: string; aud?: string | string[]; azp?: string; exp?: number; iat?: number; nonce?: string; email?: string; email_verified?: boolean };
+type UserInfo = { email?: string; email_verified?: boolean };
 type Jwks = { keys?: Array<JsonWebKey & { kid?: string }> };
 const COOKIE = "mkety_campaigns_ops";
 const SESSION_SECONDS = 12 * 60 * 60;
@@ -55,13 +56,24 @@ export function createOperatorAuth(database: Pool, env: Env): OperatorAuth {
         if (!response.ok) throw new Error("token_exchange_failed");
         const tokens = await response.json() as TokenResponse;
         if (!tokens.id_token) throw new Error("id_token_missing");
-        const email = await verifyIdToken(tokens.id_token, discovery.jwks_uri, config.issuer, config.clientId, transaction.nonce);
+        const claims = await verifyIdToken(tokens.id_token, discovery.jwks_uri, config.issuer, config.clientId, transaction.nonce);
+        let userInfo: UserInfo | undefined;
+        if ((!claims.email || claims.email_verified !== true) && tokens.access_token && discovery.userinfo_endpoint) {
+          const userInfoResponse = await fetch(discovery.userinfo_endpoint, {
+            redirect: "error", signal: AbortSignal.timeout(10_000),
+            headers: { authorization: `Bearer ${tokens.access_token}`, accept: "application/json" },
+          });
+          if (userInfoResponse.ok) userInfo = await userInfoResponse.json() as UserInfo;
+        }
+        const email = resolveVerifiedOperatorEmail(claims, userInfo);
         if (email !== config.allowedEmail) throw new Error("operator_not_allowed");
         const operator = await database.query<{ id: string }>("INSERT INTO campaign_ops_users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET last_login_at=NOW(), status='active' RETURNING id", [email]);
         const token = randomToken(32);
         await database.query("INSERT INTO campaign_ops_sessions (token_hash,user_id,expires_at) VALUES ($1,$2,NOW() + INTERVAL '12 hours')", [await sha256(token), operator.rows[0]!.id]);
         return new Response(null, { status: 302, headers: { location: new URL("/app/ops", callback).toString(), "set-cookie": sessionCookie(token, SESSION_SECONDS), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
-      } catch {
+      } catch (error) {
+        const reason = error instanceof Error && /^[a-z0-9_]+$/.test(error.message) ? error.message : "unexpected_error";
+        console.error("Campaign Ops OIDC callback failed", reason);
         const fallback = env.MKETY_OPS_AUTH_CALLBACK_URL || "https://campaign.mkety.com/api/ops/auth/callback";
         return Response.redirect(new URL("/ops-login?error=login_failed", fallback).toString(), 302);
       }
@@ -110,11 +122,19 @@ async function discover(issuer: string): Promise<Discovery> {
   if (normalizeIssuer(document.issuer) !== issuer) throw new Error("oidc_issuer_mismatch");
   return document;
 }
-export function hasMfaAssurance(amr: unknown): boolean {
-  return Array.isArray(amr) && amr.some((method) => method === "mfa");
+export function resolveVerifiedOperatorEmail(claims: Pick<Claims, "email" | "email_verified">, userInfo?: UserInfo): string {
+  let email = typeof claims.email === "string" ? claims.email.trim().toLowerCase() : "";
+  let verified = claims.email_verified === true;
+  if ((!email || !verified) && userInfo) {
+    if (!email && typeof userInfo.email === "string") email = userInfo.email.trim().toLowerCase();
+    verified = verified || userInfo.email_verified === true;
+  }
+  if (!email) throw new Error("operator_email_not_allowed");
+  if (!verified) throw new Error("operator_email_unverified");
+  return email;
 }
 
-async function verifyIdToken(token: string, jwksUri: string, issuer: string, clientId: string, nonce: string): Promise<string> {
+async function verifyIdToken(token: string, jwksUri: string, issuer: string, clientId: string, nonce: string): Promise<Claims> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("id_token_invalid");
   const header = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[0]!))) as { alg?: string; kid?: string };
@@ -132,9 +152,7 @@ async function verifyIdToken(token: string, jwksUri: string, issuer: string, cli
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud], now = Math.floor(Date.now() / 1000);
   if (normalizeIssuer(claims.iss || "") !== issuer || !audience.includes(clientId) || (audience.length > 1 && claims.azp !== clientId)) throw new Error("id_token_claims_invalid");
   if (!claims.exp || claims.exp <= now || !claims.iat || claims.iat > now + 60 || claims.nonce !== nonce) throw new Error("id_token_time_or_nonce_invalid");
-  if (!hasMfaAssurance(claims.amr)) throw new Error("operator_mfa_required");
-  if (claims.email_verified !== true || typeof claims.email !== "string") throw new Error("operator_email_unverified");
-  return claims.email.trim().toLowerCase();
+  return claims;
 }
 function normalizeIssuer(value: string): string { return value.trim().replace(/\/+$/, ""); }
 function randomToken(bytes: number): string { const data = new Uint8Array(bytes); crypto.getRandomValues(data); return base64Url(data); }
