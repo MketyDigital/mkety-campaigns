@@ -4,7 +4,7 @@ import type { EmailSendResult } from "../email/providers.js";
 import { buildUnsubscribeUrl, createOpaqueUnsubscribeToken } from "../email/unsubscribe.js";
 
 export interface CampaignDispatchRepository extends CampaignDeliveryRepository {
-  queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number>;
+  queueApproved(campaignId: string, actorUserId: string, maxRecipients: number, actorType?: "user" | "ops"): Promise<number>;
   getOpsControlStatus?(): Promise<{ emailEmergencyStop: boolean }>;
   setEmergencyStop?(paused: boolean, actorUserId: string): Promise<void>;
   isEmergencyStopActive?(): Promise<boolean>;
@@ -53,16 +53,20 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     }
   }
 
-  async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number): Promise<number> {
-    const limit = normalizeRecipientLimit(maxRecipients);
+  async queueApproved(campaignId: string, actorUserId: string, maxRecipients: number, actorType: "user" | "ops" = "user"): Promise<number> {
+    let limit = normalizeRecipientLimit(maxRecipients);
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
       const selected = await client.query<DispatchCampaignRow>(
-        `SELECT id, tenant_id, channel, status, sender_identity_id, scheduled_at
-           FROM campaigns WHERE id = $1 FOR UPDATE`, [campaignId]);
+        `SELECT c.id,c.tenant_id,c.channel,c.status,c.sender_identity_id,c.scheduled_at,
+                t.status AS tenant_status,t.expires_at,t.max_campaign_recipients,t.max_daily_email_recipients
+           FROM campaigns c JOIN tenants t ON t.id=c.tenant_id WHERE c.id=$1 FOR UPDATE OF c,t`, [campaignId]);
       const campaign = selected.rows[0];
       assertQueueable(campaign);
+      if(campaign.tenant_status!=="approved"||(campaign.expires_at&&new Date(campaign.expires_at)<=new Date())) throw new CampaignDispatchConflictError("Workspace is suspended or expired");
+      limit=Math.min(limit,normalizeRecipientLimit(campaign.max_campaign_recipients));
+      const dailyLimit=Math.min(this.dailyRecipientLimit,normalizeDailyRecipientLimit(campaign.max_daily_email_recipients));
       const sender = await client.query<{ id: string }>(
         `SELECT id FROM tenant_sender_identities
           WHERE id = $1 AND tenant_id = $2 AND status = 'ready'`,
@@ -77,7 +81,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
          ON CONFLICT (tenant_id, day_utc) DO UPDATE
            SET reserved_count = tenant_daily_email_reservations.reserved_count + EXCLUDED.reserved_count,
                max_recipients = LEAST(tenant_daily_email_reservations.max_recipients, EXCLUDED.max_recipients)`,
-        [campaign.tenant_id, contacts.rows.length, this.dailyRecipientLimit]);
+        [campaign.tenant_id, contacts.rows.length, dailyLimit]);
       for (const contact of contacts.rows) {
         await client.query(
           `INSERT INTO campaign_jobs (id, tenant_id, campaign_id, contact_id, status, idempotency_key, available_at)
@@ -93,7 +97,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       await client.query(
         `INSERT INTO audit_log (id, tenant_id, actor_user_id, action, target_type, target_id, metadata_json)
          VALUES ($1, $2, $3, 'campaign_queued', 'campaign', $4, $5)`,
-        [crypto.randomUUID(), campaign.tenant_id, actorUserId, campaign.id, JSON.stringify({ recipients: contacts.rows.length })]);
+        [crypto.randomUUID(), campaign.tenant_id, actorType === "ops" ? null : actorUserId, campaign.id, JSON.stringify({ recipients: contacts.rows.length })]);
+      if(actorType==="ops") await client.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'campaign_queued',$2)",[actorUserId,JSON.stringify({tenantId:campaign.tenant_id,campaignId:campaign.id,recipients:contacts.rows.length})]);
       await client.query("COMMIT");
       return contacts.rows.length;
     } catch (error) {
@@ -123,6 +128,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
            JOIN campaigns c ON c.id = cj.campaign_id AND c.tenant_id = cj.tenant_id
            JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
            JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
+          JOIN tenants t ON t.id = cj.tenant_id AND t.status='approved' AND (t.expires_at IS NULL OR t.expires_at>NOW())
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
             AND c.channel = 'email' AND si.status = 'ready'
@@ -321,7 +327,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
   }
 }
 
-type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null };
+type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null; tenant_status: string; expires_at: Date | string | null; max_campaign_recipients: number; max_daily_email_recipients: number };
 type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; provider: "acs-email" | "oci-email-delivery"; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
 type DeliveryStateRow = { tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string };
 
