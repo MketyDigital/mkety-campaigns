@@ -63,7 +63,8 @@ test("Ops tenant overview is aggregate-only and scoped to one tenant and allowed
   const query=calls[0];
   assert.ok(query);
   assert.deepEqual(query.params,["tenant-1",30]);
-  assert.match(query.sql,/tenant_id\s*=\s*\$1/);
+  assert.match(query.sql,/WHERE t\.id=\$1/);
+  assert.match(query.sql,/tenant_id=t\.id/);
   assert.doesNotMatch(query.sql,/contacts\.(email|phone_e164|display_name)/i);
 });
 
