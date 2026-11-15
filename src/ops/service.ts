@@ -84,34 +84,51 @@ export class PostgresOperationsService implements OperationsService {
 
   async updateWorkspace(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null> {
     if (!id || id.length > 128) throw new Error("Invalid workspace id");
-    const currentResult=await this.database.query<any>("SELECT id,name,status,plan,contract_reference,contract_started_at,expires_at,max_campaign_recipients,max_daily_email_recipients FROM tenants WHERE id=$1",[id]);
-    const current=currentResult.rows[0]; if(!current)return null;
-    const merged=validateProvisioning({
-      plan: settings.plan ?? current.plan,
-      contractReference: settings.contractReference === undefined ? current.contract_reference : settings.contractReference,
-      contractStartedAt: settings.contractStartedAt ?? new Date(current.contract_started_at).toISOString(),
-      expiresAt: settings.expiresAt === undefined ? (current.expires_at ? new Date(current.expires_at).toISOString() : null) : settings.expiresAt,
-      maxCampaignRecipients: settings.maxCampaignRecipients ?? current.max_campaign_recipients,
-      maxDailyEmailRecipients: settings.maxDailyEmailRecipients ?? current.max_daily_email_recipients
-    });
-    const status=settings.status ?? current.status;
-    if(status!=="approved"&&status!=="suspended")throw new Error("Invalid workspace status");
-    const client=await this.database.connect();
+    const client = await this.database.connect();
     try {
       await client.query("BEGIN");
-      const updated=await client.query("UPDATE tenants SET status=$2,plan=$3,contract_reference=$4,contract_started_at=$5,expires_at=$6,max_campaign_recipients=$7,max_daily_email_recipients=$8,updated_at=NOW() WHERE id=$1 RETURNING id,name,status,plan,contract_reference,contract_started_at,expires_at,max_campaign_recipients,max_daily_email_recipients,created_at",
-        [id,status,merged.plan,merged.contractReference,merged.contractStartedAt,merged.expiresAt,merged.maxCampaignRecipients,merged.maxDailyEmailRecipients]);
-      if(!updated.rows[0]){await client.query("ROLLBACK");return null;}
-      const contractBlocked=status==="suspended" || new Date(merged.contractStartedAt)>new Date() || Boolean(merged.expiresAt && new Date(merged.expiresAt)<=new Date());
-      const limitsReduced=merged.maxCampaignRecipients<current.max_campaign_recipients || merged.maxDailyEmailRecipients<current.max_daily_email_recipients;
-      if(contractBlocked||limitsReduced){
-        await client.query("UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.' WHERE tenant_id=$1 AND status='queued'",[id]);
-        await client.query("UPDATE campaigns SET status='in_review',updated_at=NOW() WHERE tenant_id=$1 AND status='queued'",[id]);
+      const currentResult = await client.query<any>(
+        "SELECT id,name,status,plan,contract_reference,contract_started_at,expires_at,max_campaign_recipients,max_daily_email_recipients FROM tenants WHERE id=$1 FOR UPDATE",
+        [id],
+      );
+      const current = currentResult.rows[0];
+      if (!current) { await client.query("ROLLBACK"); return null; }
+      const merged = validateProvisioning({
+        plan: settings.plan ?? current.plan,
+        contractReference: settings.contractReference === undefined ? current.contract_reference : settings.contractReference,
+        contractStartedAt: settings.contractStartedAt ?? new Date(current.contract_started_at).toISOString(),
+        expiresAt: settings.expiresAt === undefined ? (current.expires_at ? new Date(current.expires_at).toISOString() : null) : settings.expiresAt,
+        maxCampaignRecipients: settings.maxCampaignRecipients ?? current.max_campaign_recipients,
+        maxDailyEmailRecipients: settings.maxDailyEmailRecipients ?? current.max_daily_email_recipients,
+      });
+      const status = settings.status ?? current.status;
+      if (status !== "approved" && status !== "suspended") throw new Error("Invalid workspace status");
+      await client.query(
+        "UPDATE tenants SET status=$2,plan=$3,contract_reference=$4,contract_started_at=$5,expires_at=$6,max_campaign_recipients=$7,max_daily_email_recipients=$8,updated_at=NOW() WHERE id=$1",
+        [id,status,merged.plan,merged.contractReference,merged.contractStartedAt,merged.expiresAt,merged.maxCampaignRecipients,merged.maxDailyEmailRecipients],
+      );
+      const contractBlocked = status === "suspended" || new Date(merged.contractStartedAt) > new Date() || Boolean(merged.expiresAt && new Date(merged.expiresAt) <= new Date());
+      const limitsReduced = merged.maxCampaignRecipients < current.max_campaign_recipients || merged.maxDailyEmailRecipients < current.max_daily_email_recipients;
+      if (contractBlocked || limitsReduced) {
+        await client.query(
+          "UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.' WHERE tenant_id=$1 AND status='queued'",
+          [id],
+        );
+        await client.query("UPDATE campaigns SET status='in_review',updated_at=NOW() WHERE tenant_id=$1 AND status='queued'", [id]);
       }
-      await client.query("INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'workspace_updated',$2)",[actorId,JSON.stringify({workspaceId:id,before:{status:current.status,plan:current.plan,expiresAt:current.expires_at},after:{status,...merged}})]);
+      await client.query(
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'workspace_updated',$2)",
+        [actorId,JSON.stringify({workspaceId:id,before:{status:current.status,plan:current.plan,expiresAt:current.expires_at},after:{status,...merged}})],
+      );
       await client.query("COMMIT");
-    } catch(error){await client.query("ROLLBACK");throw error;} finally{client.release();}
-    const listed=await this.listWorkspaces(); return listed.find(row=>row.id===id)??null;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    const listed = await this.listWorkspaces();
+    return listed.find(row => row.id === id) ?? null;
   }
 
   async listInvitations() {
