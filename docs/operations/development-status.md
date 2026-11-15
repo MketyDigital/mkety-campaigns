@@ -1,6 +1,6 @@
 # MKETY Campaigns: implementation status, roadmap, and pilot gates
 
-**Audit date:** 2026-11-15. **Status:** PR #96 (`93609c64dcc526671d118b279fecef49aa6f9119`) is merged to `main`; the production provisioning workflow completed successfully, and the latest read-only deployment check reports Coolify `running:healthy`, `/healthz` HTTP 200, and database-backed `/readyz` HTTP 200. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
+**Audit date:** 2026-11-15. **Status:** PRs #96, #98, and #99 are merged to `main`. The latest production deployment finished at 2026-11-15 21:26:29 UTC; Coolify reports `running:healthy`, and public `/healthz` and database-backed `/readyz` return HTTP 200. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
 
 This page describes code on main separately from live operational evidence. Passing CI or merging code proves neither successful deployment nor safe live delivery. The 2026-10-29 design and 2026-10-30 implementation plan remain historical intent.
 
@@ -21,9 +21,9 @@ This page describes code on main separately from live operational evidence. Pass
 
 ## Ops console inventory and next controls
 
-The owner reported a successful MKETY Auth OIDC sign-in on 2026-11-15. PR #96 (branch `feat/campaign-ops-workspace-controls`) is merged to `main` as `93609c64dcc526671d118b279fecef49aa6f9119`. CI passed (typecheck, build, PostgreSQL migrations, auth-schema check, and tests); the production provisioning workflow and post-deploy health checks also completed successfully. This separate verifier session could not authenticate to inspect the signed-in dashboard, so the final authenticated UI smoke check remains outstanding.
+The owner reported a successful MKETY Auth OIDC sign-in on 2026-11-15. PR #96 (`93609c64dcc526671d118b279fecef49aa6f9119`) added workspace controls; PR #98 (`f9def0d356a6c0845cd7bb439da4af7914b87661`) added aggregate usage and delivery summaries; PR #99 (`c6d7a1bddf0c87ec3d007287b171fef03528185d`) added aggregate domain/sender readiness. All three passed CI and their production deployment workflows completed. This separate verifier session could not authenticate to inspect the signed-in dashboard, so an authenticated smoke check of the new UI remains outstanding.
 
-| Ops capability | Current behavior after PR #96 |
+| Ops capability | Current behavior after PR #99 |
 | --- | --- |
 | Operator identity | OIDC PKCE, verified allowlisted email, app-local hashed session, secure cookie, disabled-operator enforcement. One allowlisted operator; no role or operator-management UI. |
 | Workspace provisioning | Create tenant and its single owner seat invitation with contract start/expiry, plan/reference, and per-campaign and per-day email limits. |
@@ -31,13 +31,13 @@ The owner reported a successful MKETY Auth OIDC sign-in on 2026-11-15. PR #96 (b
 | Owner invites | Single-use seven-day invite with hashed token storage; Ops can list invitation status, rotate a one-time link, and revoke it. No extra employee/team seats. |
 | Campaign operations | Review/approve/reject without sending; explicit email queue action; global email emergency stop. Ops actor actions go to campaign_ops_audit; email send/test-send runtime gates remain off. SMS dispatch remains disabled. |
 | Customer setup | Tenants manage their own contacts/consent, domains, sender identities, and campaign drafts. Ops does not currently have customer impersonation, contact editing, or sender/domain override controls. |
-| Reporting and audit | Campaign queue/review and global runtime status only. No Ops usage/cost/delivery dashboard or searchable audit-log UI yet. Audit records are persisted. |
+| Reporting and audit | Campaign queue/review, global runtime status, and on-demand aggregate workspace overview: contact totals, latest consent and suppression counts, campaign status totals, delivery outcomes over 7/30/90 days, verified-domain counts, and ready-sender counts. Contact addresses, message content, DNS verification material, and sender addresses are excluded. Cost accounting and searchable audit/history views are not available yet; audit records are persisted. |
 
-Next Ops product work after PR #96: add tenant detail/search with usage and delivery outcome summaries; expose read-only domain/sender readiness and consent/suppression status; add campaign and invite history filters plus audit-log search; provide a safe owner-seat transfer/recovery workflow that revokes sessions and requires MFA re-enrollment. Keep customer contact data and consent evidence tenant-scoped; do not add impersonation or destructive data deletion as routine Ops actions.
+Next Ops product work after PR #99: add searchable campaign/invitation history and an audit-log view with strict pagination and tenant filters; implement owner-seat transfer/recovery with session revocation, verified recipient confirmation, MFA re-enrollment, and an auditable rollback path. Keep customer contact data and consent evidence tenant-scoped; do not add impersonation or destructive data deletion as routine Ops actions.
 
 ## Production evidence checked
 
-The latest post-deploy verification ran after PR #96 was merged. Coolify reports `running:healthy`, and public `/healthz` returned HTTP 200 (`ok`) while `/readyz` returned HTTP 200 (`ready`). The latest deployment record was `finished` at 2026-11-15 20:45:42 UTC. The provisioning workflow requested that deployment with email campaign sends, test sends, SMS, and OCI backup explicitly disabled. Runtime readiness confirms live PostgreSQL connectivity. The verifier cannot independently confirm the deployed source SHA because Coolify reports `git_commit_sha=HEAD`; GitHub Actions confirms the production workflow ran from merge commit `93609c64dcc526671d118b279fecef49aa6f9119`.
+The latest post-deploy verification ran after PR #99. Coolify reports `running:healthy`; `/healthz` returned HTTP 200 (`ok`) and `/readyz` returned HTTP 200 (`ready`). The latest deployment record finished at 2026-11-15 21:26:29 UTC. The provisioning workflow explicitly kept email campaign sends, test sends, SMS, and OCI backup disabled. Runtime readiness confirms live PostgreSQL connectivity. Coolify still reports `git_commit_sha=HEAD`, so the exact running image SHA is not independently exposed; GitHub Actions confirms the deployment workflow ran from merge commit `c6d7a1bddf0c87ec3d007287b171fef03528185d`.
 
 The health-check failure was caused by the runtime image lacking both `curl` and `wget`, which Coolify requires inside the app container to run dashboard-configured HTTP checks. The runtime Docker image now installs `curl`; the strict database-backed `/readyz` check is restored. The temporary `/healthz` platform check and certificate-bypassing diagnostic probe have been removed. Historical failed deployment records may still show the earlier health-check failure; the latest app state is healthy.
 
