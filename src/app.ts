@@ -618,10 +618,23 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
 
   app.post("/api/ops/tenant-invitations", async (c) => {
     if (!operations) return c.json({ error: "operations_not_configured" }, 503);
-    const payload = await c.req.json().catch(() => null) as { tenantName?: unknown; email?: unknown } | null;
+    const payload = await c.req.json().catch(() => null) as { tenantName?: unknown; email?: unknown; plan?: unknown; contractReference?: unknown; contractStartedAt?: unknown; expiresAt?: unknown; maxCampaignRecipients?: unknown; maxDailyEmailRecipients?: unknown } | null;
     if (!payload || typeof payload.tenantName !== "string" || typeof payload.email !== "string") return c.json({ error: "invite_invalid" }, 400);
+    if (payload.plan !== undefined && !["standard","growth","enterprise"].includes(String(payload.plan))) return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.contractReference !== undefined && typeof payload.contractReference !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.contractStartedAt !== undefined && typeof payload.contractStartedAt !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.expiresAt !== undefined && payload.expiresAt !== null && typeof payload.expiresAt !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.maxCampaignRecipients !== undefined && typeof payload.maxCampaignRecipients !== "number") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.maxDailyEmailRecipients !== undefined && typeof payload.maxDailyEmailRecipients !== "number") return c.json({ error: "workspace_settings_invalid" }, 400);
     try {
-      const result = await operations.createTenantInvite(payload.tenantName, payload.email);
+      const result = await operations.createTenantInvite(payload.tenantName, payload.email, {
+        plan: payload.plan as "standard"|"growth"|"enterprise"|undefined,
+        contractReference: payload.contractReference as string|undefined,
+        contractStartedAt: payload.contractStartedAt as string|undefined,
+        expiresAt: payload.expiresAt as string|null|undefined,
+        maxCampaignRecipients: payload.maxCampaignRecipients as number|undefined,
+        maxDailyEmailRecipients: payload.maxDailyEmailRecipients as number|undefined,
+      });
       return c.json(result, 201);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
@@ -629,6 +642,46 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
       if (/already (has an account|exists)/i.test(message)) return c.json({ error: "invite_conflict" }, 409);
       return c.json({ error: "invite_failed" }, 500);
     }
+  });
+
+  app.get("/api/ops/workspaces", async (c) => {
+    if (!operations?.listWorkspaces) return c.json({ error: "workspace_controls_not_configured" }, 503);
+    try { return c.json({ workspaces: await operations.listWorkspaces() }); }
+    catch { return c.json({ error: "workspace_list_unavailable" }, 500); }
+  });
+  app.patch("/api/ops/workspaces/:id", async (c) => {
+    if (!operations?.updateWorkspace) return c.json({ error: "workspace_controls_not_configured" }, 503);
+    const payload = await c.req.json().catch(() => null) as Record<string, unknown> | null;
+    const allowed = new Set(["status","plan","contractReference","contractStartedAt","expiresAt","maxCampaignRecipients","maxDailyEmailRecipients"]);
+    if (!payload || Object.keys(payload).some(key => !allowed.has(key))) return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.status !== undefined && payload.status !== "approved" && payload.status !== "suspended") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.plan !== undefined && !["standard","growth","enterprise"].includes(String(payload.plan))) return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.contractReference !== undefined && typeof payload.contractReference !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.contractStartedAt !== undefined && typeof payload.contractStartedAt !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    if (payload.expiresAt !== undefined && payload.expiresAt !== null && typeof payload.expiresAt !== "string") return c.json({ error: "workspace_settings_invalid" }, 400);
+    for (const key of ["maxCampaignRecipients","maxDailyEmailRecipients"]) if (payload[key] !== undefined && typeof payload[key] !== "number") return c.json({ error: "workspace_settings_invalid" }, 400);
+    try {
+      const workspace = await operations.updateWorkspace(c.req.param("id"), payload as never, c.get("opsUserId"));
+      return workspace ? c.json({ workspace }) : c.json({ error: "workspace_not_found" }, 404);
+    } catch (error) {
+      if (error instanceof Error && /Invalid|limit|reference|date/i.test(error.message)) return c.json({ error: "workspace_settings_invalid" }, 400);
+      return c.json({ error: "workspace_update_failed" }, 500);
+    }
+  });
+  app.get("/api/ops/invitations", async (c) => {
+    if (!operations?.listInvitations) return c.json({ error: "workspace_controls_not_configured" }, 503);
+    try { return c.json({ invitations: await operations.listInvitations() }); }
+    catch { return c.json({ error: "invitation_list_unavailable" }, 500); }
+  });
+  app.post("/api/ops/invitations/:id/rotate", async (c) => {
+    if (!operations?.rotateInvitation) return c.json({ error: "workspace_controls_not_configured" }, 503);
+    try { const result = await operations.rotateInvitation(c.req.param("id"), c.get("opsUserId")); return result ? c.json(result) : c.json({ error: "invitation_not_active" }, 409); }
+    catch { return c.json({ error: "invitation_update_failed" }, 500); }
+  });
+  app.post("/api/ops/invitations/:id/revoke", async (c) => {
+    if (!operations?.revokeInvitation) return c.json({ error: "workspace_controls_not_configured" }, 503);
+    try { const revoked = await operations.revokeInvitation(c.req.param("id"), c.get("opsUserId")); return revoked ? c.json({ revoked: true }) : c.json({ error: "invitation_not_active" }, 409); }
+    catch { return c.json({ error: "invitation_update_failed" }, 500); }
   });
 
   app.get("/api/ops/campaigns/review", async (c) => {
