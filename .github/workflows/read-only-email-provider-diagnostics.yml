@@ -135,7 +135,7 @@ jobs:
                 provider_code: codeFrom(body),
                 request_id: headerId(response, 'x-ms-request-id', 'x-ms-correlation-request-id'),
                 provisioning_state: safeCode(body?.properties?.provisioningState) || null,
-                domain_verified: body?.properties?.verificationStates ? Object.values(body.properties.verificationStates).every(value => value?.status === 'Verified') : null,
+                domain_verified: body?.properties?.verificationStates ? (Object.keys(body.properties.verificationStates).length > 0 && Object.values(body.properties.verificationStates).every(value => value?.status === 'Verified')) : null,
               });
               const communicationPath = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/communicationServices/${encodeURIComponent(process.env.AZURE_COMMUNICATION_SERVICE_NAME)}?api-version=2025-05-01`;
               const communicationResponse = await fetch(new URL(communicationPath, 'https://management.azure.com'), {
@@ -235,7 +235,7 @@ jobs:
           async function readRecentProvisioningDiagnostics() {
             try {
               const raw = process.env.COOLIFY_URL || '';
-              const origin = new URL(raw.includes('://') ? raw : 'https://' + raw.replace(/^\\/\\//, ''));
+              const origin = new URL(raw.includes('://') ? raw : 'https://' + raw.replace(/^\/\//, ''));
               if (origin.protocol !== 'https:' || !process.env.COOLIFY_API_TOKEN) return report('Recent domain provisioning diagnostics', { result: 'unavailable' });
               const api = origin.origin + '/api/v1';
               const get = async path => {
@@ -248,7 +248,7 @@ jobs:
               if (!app?.uuid) return report('Recent domain provisioning diagnostics', { result: 'application_not_found' });
               const payload = await get('/applications/' + encodeURIComponent(app.uuid) + '/logs?lines=150');
               const logs = typeof payload.logs === 'string' ? payload.logs : '';
-              const records = [...logs.matchAll(/Email domain provisioning failed\\s+(\\{[^}\\r\\n]{1,1000}\\})/g)].flatMap(match => {
+              const records = [...logs.matchAll(/Email domain provisioning failed\s+(\{[^}\r\n]{1,1000}\})/g)].flatMap(match => {
                 try {
                   const row = JSON.parse(match[1]);
                   return [{ operation: row.operation, error_name: row.errorName, provider_status: Number.isInteger(row.providerStatus) ? row.providerStatus : null, provider_code: safeCode(row.providerCode) || null, request_id: safeRequestId(row.requestId) || null }];
