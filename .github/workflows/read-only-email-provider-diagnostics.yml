@@ -246,6 +246,7 @@ jobs:
                 http_status: response.status,
                 provider_code: codeFrom(body),
                 request_id: headerId(response, 'opc-request-id'),
+                server_clock_skew_seconds: response.headers.get('date') ? Math.round((Date.now() - Date.parse(response.headers.get('date'))) / 1000) : null,
                 domain_state: safeCode(domain?.lifecycleState) || null,
                 spf_verified: domain?.isSpf === true,
                 active_dkim_present: Boolean(domain?.activeDkimId),
