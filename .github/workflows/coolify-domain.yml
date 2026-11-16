@@ -204,4 +204,15 @@ jobs:
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
             --request POST "${headers[@]}" "$api/applications/$app_uuid/start?instant_deploy=true" \
             > "$RUNNER_TEMP/coolify-deploy.json"
-          echo "Coolify domain configured and deployment requested for campaign.mkety.com."
+          healthy=false
+          for attempt in $(seq 1 30); do
+            health_code="$(curl --fail --silent --output /dev/null --write-out "%{http_code}" "$CAMPAIGNS_DOMAIN/healthz" || true)"
+            ready_code="$(curl --fail --silent --output /dev/null --write-out "%{http_code}" "$CAMPAIGNS_DOMAIN/readyz" || true)"
+            if [ "$health_code" = "200" ] && [ "$ready_code" = "200" ]; then healthy=true; break; fi
+            sleep 10
+          done
+          if [ "$healthy" != "true" ]; then
+            echo "Deployment was requested, but /healthz and /readyz did not both return HTTP 200." >&2
+            exit 1
+          fi
+          echo "Coolify deployment is healthy; /healthz and /readyz returned HTTP 200."
