@@ -89,7 +89,7 @@ jobs:
                 request_id: headerId(response, 'x-ms-request-id', 'x-ms-correlation-request-id'),
               });
             } catch (error) {
-              report('ACS email credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
+              report('ACS email credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError', network_code: safeCode(error?.cause?.code) || safeCode(error?.code) || null, endpoint_host: endpoint.host });
             }
           }
 
@@ -231,6 +231,8 @@ jobs:
               report('OCI Email Delivery credential check', {
                 result: 'request_unavailable',
                 error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : error instanceof Error && /key|pem/i.test(error.message) ? 'PrivateKeyImportError' : 'NetworkOrSigningError',
+                error_name: safeCode(error?.name) || 'Error',
+                error_code: safeCode(error?.code) || safeCode(error?.cause?.code) || null,
               });
             }
           }
@@ -250,7 +252,7 @@ jobs:
               const apps = Array.isArray(appsPayload) ? appsPayload : Array.isArray(appsPayload.applications) ? appsPayload.applications : [];
               const app = apps.find(item => item.name === 'mkety-campaigns');
               if (!app?.uuid) return report('Recent domain provisioning diagnostics', { result: 'application_not_found' });
-              const payload = await get('/applications/' + encodeURIComponent(app.uuid) + '/logs?lines=150');
+              const payload = await get('/applications/' + encodeURIComponent(app.uuid) + '/logs?lines=1000');
               const logs = typeof payload.logs === 'string' ? payload.logs : '';
               const records = [...logs.matchAll(/Email domain provisioning failed\s+(\{[^}\r\n]{1,1000}\})/g)].flatMap(match => {
                 try {
