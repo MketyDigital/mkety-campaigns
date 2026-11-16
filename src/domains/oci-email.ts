@@ -23,7 +23,7 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
   const privateKey = required(config.privateKey, "OCI_EMAIL_PRIVATE_KEY");
   const compartment = required(config.compartmentOcid, "OCI_EMAIL_COMPARTMENT_OCID");
   const fetcher = config.fetcher ?? fetch;
-  const endpoint = `https://email.${region}.oci.oraclecloud.com`;
+  const endpoint = `https://ctrl.email.${region}.oci.oraclecloud.com`;
 
   async function request(method: "GET" | "POST", path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>> {
     const url = new URL(path, endpoint);
