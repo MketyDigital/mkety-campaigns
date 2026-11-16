@@ -125,6 +125,19 @@ jobs:
                   request_id: headerId(tokenResponse, 'x-ms-request-id', 'request-id'),
                 });
               }
+              const emailServicePath = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/emailServices/${encodeURIComponent(process.env.AZURE_EMAIL_SERVICE_NAME)}?api-version=2025-05-01`;
+              const emailServiceResponse = await fetch(new URL(emailServicePath, 'https://management.azure.com'), {
+                headers: { authorization: `Bearer ${payload.access_token}` },
+                signal: AbortSignal.timeout(12000),
+              });
+              const emailServiceBody = await json(emailServiceResponse);
+              report('Azure Email Service resource check', {
+                result: emailServiceResponse.ok ? 'authenticated' : emailServiceResponse.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
+                http_status: emailServiceResponse.status,
+                provider_code: codeFrom(emailServiceBody),
+                request_id: headerId(emailServiceResponse, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+                provisioning_state: safeCode(emailServiceBody?.properties?.provisioningState) || null,
+              });
               const path = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/emailServices/${encodeURIComponent(process.env.AZURE_EMAIL_SERVICE_NAME)}/domains/email.mkety.com?api-version=2025-05-01`;
               const response = await fetch(new URL(path, 'https://management.azure.com'), {
                 headers: { authorization: `Bearer ${payload.access_token}` },
