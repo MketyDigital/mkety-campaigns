@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { createHmac, createPrivateKey, createSign, randomUUID, createHash } from 'node:crypto';
+          import { createHmac, createPrivateKey, createPublicKey, createSign, randomUUID, createHash } from 'node:crypto';
 
           const safeCode = value => typeof value === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined;
           const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
@@ -194,6 +194,13 @@ jobs:
             const missing = required(keys);
             if (missing.length) return report('OCI Email Delivery credential check', { result: 'missing_configuration', missing_keys: missing });
             try {
+              const privateKeyObject = createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY.replace(/\\n/g, '\n'));
+              const publicKeyDer = createPublicKey(privateKeyObject).export({ type: 'spki', format: 'der' });
+              const derivedFingerprint = createHash('md5').update(publicKeyDer).digest('hex').match(/.{2}/g)?.join(':') || '';
+              report('OCI API key fingerprint check', {
+                result: derivedFingerprint.toLowerCase() === process.env.OCI_EMAIL_FINGERPRINT.trim().toLowerCase()
+                  ? 'matches_configured_fingerprint' : 'does_not_match_configured_fingerprint',
+              });
               const submitEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT);
               const submitRegion = submitEndpoint.hostname.match(/\.submit\.email\.([a-z0-9-]+)\.oci\.oraclecloud\.com$/i)?.[1] || null;
               const configuredRegion = process.env.OCI_EMAIL_REGION.trim();
