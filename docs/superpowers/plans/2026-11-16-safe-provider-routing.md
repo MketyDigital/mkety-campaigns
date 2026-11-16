@@ -61,3 +61,12 @@
 - [x] Document how to set credentials, choose primary/fallback, prepare the same domain and sender address once on each provider, and reconcile uncertain sends/domain setup.
 - [x] Confirm no production sending flags or provider secrets changed; review all changed files and run the full verification command set.
 - [x] Open a draft PR with exact release gates and test/deployment caveats.
+
+### Task 5: Reconcile uncertain provider setup safely
+
+**Files:** `src/domains/service.ts`, `src/domains/repository.ts`, `src/app.ts`, their tests, `.github/workflows/read-only-email-provider-diagnostics.yml`
+
+- [x] Let Ops reconcile an old `Unknown` domain through the configured alternate only after the source provider returns an explicit `NotFound` or `ResourceNotFound`; reject OCI `NotAuthorizedOrNotFound`.
+- [x] Require a ten-minute propagation window for uncertain create attempts and an atomic `Failed`/`Unknown` state transition before any alternate-provider create request.
+- [x] Add a visible Ops action for uncertain records and preserve no-retry behavior for recent or ambiguous outcomes.
+- [x] Run provider diagnostics automatically after a successful production deployment; the workflow remains read-only and never sends email.
