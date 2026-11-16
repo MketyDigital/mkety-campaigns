@@ -144,8 +144,9 @@ jobs:
               local method
               method="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" "$key" <<'NODE'
           import fs from 'node:fs';
-          const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).filter((entry) => entry.key === process.argv[3]);
-          if (entries.length > 1) { console.error(`Duplicate Coolify environment entries: ${process.argv[3]}`); process.exit(1); }
+          const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+            .filter((entry) => entry.key === process.argv[3] && entry.is_preview !== true);
+          if (entries.length > 1) { console.error(`Ambiguous production Coolify environment entries: ${process.argv[3]}`); process.exit(1); }
           process.stdout.write(entries.length ? 'PATCH' : 'POST');
           NODE
               )"
@@ -177,7 +178,7 @@ jobs:
             ['OCI_BACKUP_ENABLED', 'false'],
           ]);
           for (const [key, value] of expected) {
-            const entries = envs.filter((entry) => entry.key === key);
+            const entries = envs.filter((entry) => entry.key === key && entry.is_preview !== true);
             if (entries.length !== 1 || String(entries[0].value).trim().toLowerCase() !== value) {
               throw new Error(`Coolify did not confirm the expected safe gate for ${key}`);
             }
@@ -188,8 +189,8 @@ jobs:
           env_uuid="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" <<'NODE'
           import fs from 'node:fs';
           const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const matches = envs.filter(value => value.key === 'BETTER_AUTH_URL');
-          if (matches.length > 1) { console.error('Coolify has duplicate BETTER_AUTH_URL entries.'); process.exit(1); }
+          const matches = envs.filter(value => value.key === 'BETTER_AUTH_URL' && value.is_preview !== true);
+          if (matches.length > 1) { console.error('Coolify has ambiguous production BETTER_AUTH_URL entries.'); process.exit(1); }
           process.stdout.write(matches[0]?.uuid ?? '');
           NODE
           )"
