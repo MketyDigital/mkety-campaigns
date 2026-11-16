@@ -1,4 +1,4 @@
-import type { EmailProvider, EmailSendResult } from "../email/providers.js";
+import { EmailProviderRequestError, type EmailProvider, type EmailSendResult } from "../email/providers.js";
 
 export type CampaignDeliveryJob = {
   id: string;
@@ -6,6 +6,7 @@ export type CampaignDeliveryJob = {
   campaignId: string;
   contactId: string;
   provider: EmailSendResult["provider"];
+  fallbackProvider?: EmailSendResult["provider"];
   idempotencyKey: string;
   from: string;
   to: string;
@@ -50,8 +51,7 @@ export function createEmailCampaignWorker(
         await repository.markUncertain(job.id, "A valid HTTPS unsubscribe link is required before delivery.");
         return true;
       }
-      try {
-        const result = await provider.send({
+      const message = {
           idempotencyKey: job.idempotencyKey,
           from: job.from,
           to: [job.to],
@@ -62,7 +62,19 @@ export function createEmailCampaignWorker(
             "List-Unsubscribe": `<${job.unsubscribeUrl}>`,
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
           } } : {}),
-        });
+        };
+      try {
+        let result: EmailSendResult;
+        try {
+          result = await provider.send(message);
+        } catch (error) {
+          const fallback = job.fallbackProvider && job.fallbackProvider !== job.provider
+            ? (Array.isArray(providers) ? providers.find((candidate) => candidate.name === job.fallbackProvider) : providers.name === job.fallbackProvider ? providers : undefined)
+            : undefined;
+          if (!(error instanceof EmailProviderRequestError) || error.disposition !== "rejected" || !fallback) throw error;
+          if (repository.isEmergencyStopActive && await repository.isEmergencyStopActive()) throw new Error("Email emergency stop became active before fallback.");
+          result = await fallback.send(message);
+        }
         await repository.markAccepted(job.id, result);
       } catch {
         try { await repository.markUncertain(job.id, UNCERTAIN_REASON); } catch { /* Lease recovery records this as uncertain. */ }

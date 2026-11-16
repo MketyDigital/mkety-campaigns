@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
-import { D1CampaignDispatchRepository } from "./delivery-repository.js";
+import { D1CampaignDispatchRepository, EmailProviderPolicyError, PostgresCampaignDispatchRepository } from "./delivery-repository.js";
 import { D1EmailEventReconciler } from "../email/delivery-reconciliation.js";
 import { D1CampaignWorkspace } from "./repository.js";
 
@@ -103,6 +103,35 @@ test("D1 campaign jobs retain and route the provider attached to the sender", as
     const job = await repository.claimNext();
     assert.equal(job?.provider, "oci-email-delivery");
   } finally { db.close(); }
+});
+
+test("Ops email provider policy is constrained to configured adapters and audited", async () => {
+  const calls: Array<{ sql: string; params: unknown[] }> = [];
+  let policy: { primary_email_provider: "acs-email" | "oci-email-delivery" | null; fallback_email_provider: "acs-email" | "oci-email-delivery" | null } = {
+    primary_email_provider: null, fallback_email_provider: null,
+  };
+  const query = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+    calls.push({ sql, params });
+    if (sql.startsWith("SELECT primary_email_provider")) return { rows: [policy] as T[] };
+    if (sql.includes("primary_email_provider=EXCLUDED")) policy = { primary_email_provider: params[0] as typeof policy.primary_email_provider, fallback_email_provider: params[1] as typeof policy.fallback_email_provider };
+    return { rows: [] as T[] };
+  };
+  const client = { query, release() {} };
+  const pool = { query, async connect() { return client; } } as unknown as import("./repository.js").PostgresPool;
+  const repository = new PostgresCampaignDispatchRepository(pool, "https://campaign.mkety.com", 1000, 1000, ["acs-email", "oci-email-delivery"], "acs-email");
+
+  assert.deepEqual(await repository.getEmailProviderRouting(), {
+    primaryProvider: "acs-email", fallbackProvider: null, availableProviders: ["acs-email", "oci-email-delivery"], domainSetupProviders: ["acs-email", "oci-email-delivery"],
+  });
+  await assert.rejects(repository.setEmailProviderRouting("acs-email", "acs-email", "ops-1"), EmailProviderPolicyError);
+  const onlyAcs = new PostgresCampaignDispatchRepository(pool, "https://campaign.mkety.com", 1000, 1000, ["acs-email"], "acs-email");
+  await assert.rejects(onlyAcs.setEmailProviderRouting("oci-email-delivery", null, "ops-1"), /configured/);
+  const acsDomainOnly = new PostgresCampaignDispatchRepository(pool, "https://campaign.mkety.com", 1000, 1000, ["acs-email", "oci-email-delivery"], "acs-email", ["acs-email"]);
+  await assert.rejects(acsDomainOnly.setEmailProviderRouting("oci-email-delivery", null, "ops-1"), /domain setup/);
+  const saved = await repository.setEmailProviderRouting("acs-email", "oci-email-delivery", "ops-1");
+  assert.equal(saved.fallbackProvider, "oci-email-delivery");
+  assert.ok(calls.some((call) => call.sql.includes("email_provider_routing_updated") && call.params[0] === "ops-1"));
+  assert.ok(calls.some((call) => call.sql.includes("fallback_email_provider") && call.params.includes("oci-email-delivery")));
 });
 
 test("authenticated delivery reconciliation suppresses bounced contacts idempotently", async () => {

@@ -46,13 +46,25 @@ export interface AzureCommunicationDomains {
   getSenderUsername(domainName: string, username: string): Promise<AzureSenderUsernameState>;
 }
 
+export class EmailDomainProviderError extends Error {
+  constructor(
+    readonly provider: "acs-email" | "oci-email-delivery",
+    readonly status: number,
+    readonly providerCode: string,
+    readonly requestId?: string,
+  ) {
+    super(`${provider} domain request failed with HTTP ${status} (${providerCode})`);
+    this.name = "EmailDomainProviderError";
+  }
+}
+
 const DEFAULT_API_VERSION = "2025-05-01";
 const ARM_ENDPOINT = "https://management.azure.com";
 const LINK_UPDATE_ATTEMPTS = 5;
 
-class AzureArmRequestError extends Error {
-  constructor(readonly status: number) {
-    super(`Azure Resource Manager request failed with HTTP ${status}`);
+class AzureArmRequestError extends EmailDomainProviderError {
+  constructor(status: number, code: string, requestId?: string) {
+    super("acs-email", status, code, requestId);
     this.name = "AzureArmRequestError";
   }
 }
@@ -89,7 +101,7 @@ export function createAzureCommunicationDomains(config: AzureCommunicationDomain
       }),
     });
     const payload = await readJson(response);
-    if (!response.ok) throw requestError("Azure identity token", response.status);
+    if (!response.ok) throw requestError("Azure identity token", response.status, payload, response.headers);
     const token = stringField(payload, "access_token");
     if (!token) throw new Error("Azure identity response did not include an access token");
     return token;
@@ -107,7 +119,7 @@ export function createAzureCommunicationDomains(config: AzureCommunicationDomain
       },
     });
     const payload = await readJson(response);
-    if (!response.ok) throw requestError("Azure Resource Manager", response.status);
+    if (!response.ok) throw requestError("Azure Resource Manager", response.status, payload, response.headers);
     if (!stringField(payload, "etag")) {
       const etag = response.headers.get("etag");
       if (etag) payload.etag = etag;
@@ -323,7 +335,15 @@ function required(value: string | undefined, name: string): string {
   return value.trim();
 }
 
-function requestError(service: string, status: number): Error {
-  if (service === "Azure Resource Manager") return new AzureArmRequestError(status);
-  return new Error(`${service} request failed with HTTP ${status}`);
+function requestError(service: string, status: number, payload: Record<string, unknown>, headers: Headers): Error {
+  const errorBody = objectField(payload, "error");
+  const rawCode = (errorBody ? stringField(errorBody, "code") : undefined)
+    ?? headers.get("x-ms-error-code")
+    ?? (typeof payload.error === "string" ? payload.error : undefined)
+    ?? "request_failed";
+  const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : "provider_error";
+  const requestId = headers.get("x-ms-request-id") ?? headers.get("x-ms-correlation-request-id") ?? undefined;
+  const safeRequestId = requestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(requestId) ? requestId : undefined;
+  if (service === "Azure Resource Manager") return new AzureArmRequestError(status, code, safeRequestId);
+  return new EmailDomainProviderError("acs-email", status, code, safeRequestId);
 }

@@ -4,7 +4,7 @@ import { getPostgresPoolOptions } from "../scripts/postgres-pool-options.mjs";
 import { createApp } from "./app.js";
 import { createAuth } from "./auth.js";
 import { PostgresDomainRepository } from "./domains/repository.js";
-import { createOptionalEmailDomainProvider } from "./domains/runtime.js";
+import { createOptionalEmailDomainProviders } from "./domains/runtime.js";
 import { createTenantDomainService } from "./domains/service.js";
 import { PostgresSenderRepository, createTenantSenderService } from "./domains/senders.js";
 import { PostgresCampaignWorkspace } from "./campaigns/repository.js";
@@ -50,15 +50,11 @@ const domainRepository = pool ? new PostgresDomainRepository(pool) : undefined;
 const emailProviderName = process.env.EMAIL_PROVIDER ?? "acs-email";
 const emailProviders = createOptionalEmailProviders(process.env);
 const emailProvider = createSelectedEmailProvider(process.env);
-const emailDomainProvider = createOptionalEmailDomainProvider(process.env);
-const domains = domainRepository && emailDomainProvider ? createTenantDomainService(domainRepository, emailDomainProvider, emailProviderName as "acs-email" | "oci-email-delivery") : undefined;
-const senders = domainRepository && pool && emailDomainProvider
-  ? createTenantSenderService(domainRepository, new PostgresSenderRepository(pool), emailDomainProvider, emailProviderName as "acs-email" | "oci-email-delivery")
-  : undefined;
+const emailDomainProviders = createOptionalEmailDomainProviders(process.env);
 const emailTestSender = process.env.EMAIL_TEST_SEND_ENABLED === "true"
-  ? pool && emailProvider
-    ? createEmailTestSender(new PostgresSenderRepository(pool), emailProvider)
-    : (() => { throw new Error("Email test send requires a configured EMAIL_PROVIDER"); })()
+  ? pool && emailProviders.length
+    ? createEmailTestSender(new PostgresSenderRepository(pool), emailProviders)
+    : (() => { throw new Error("Email test send requires at least one configured email provider"); })()
   : undefined;
 const workspace = pool ? new PostgresCampaignWorkspace(pool) : undefined;
 const campaignDispatchEnabled = process.env.EMAIL_CAMPAIGN_SEND_ENABLED === "true";
@@ -66,7 +62,22 @@ const campaignRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_MAX_RECIPIENTS 
 const dailyRecipientLimit = Number(process.env.EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT ?? 1000);
 const providerMinIntervalMs = Number(process.env.EMAIL_PROVIDER_MIN_INTERVAL_MS ?? 1000);
 const campaignDispatch = pool && process.env.BETTER_AUTH_URL
-  ? new PostgresCampaignDispatchRepository(pool, process.env.BETTER_AUTH_URL, dailyRecipientLimit, providerMinIntervalMs)
+  ? new PostgresCampaignDispatchRepository(
+    pool,
+    process.env.BETTER_AUTH_URL,
+    dailyRecipientLimit,
+    providerMinIntervalMs,
+    emailProviders.map((provider) => provider.name),
+    emailProvider?.name ?? null,
+    Object.keys(emailDomainProviders) as Array<"acs-email" | "oci-email-delivery">,
+  )
+  : undefined;
+const domains = domainRepository && Object.keys(emailDomainProviders).length
+  ? createTenantDomainService(domainRepository, emailDomainProviders, async () =>
+    (await campaignDispatch?.getEmailProviderRouting())?.primaryProvider ?? emailProviderName as "acs-email" | "oci-email-delivery")
+  : undefined;
+const senders = domainRepository && pool && Object.keys(emailDomainProviders).length
+  ? createTenantSenderService(domainRepository, new PostgresSenderRepository(pool), emailDomainProviders)
   : undefined;
 if (campaignDispatchEnabled && (!pool || !process.env.BETTER_AUTH_URL || !emailProvider)) {
   throw new Error("Campaign sending requires DATABASE_URL, BETTER_AUTH_URL, and a configured EMAIL_PROVIDER");

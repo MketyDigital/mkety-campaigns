@@ -10,6 +10,7 @@ const verifiedDomain: TenantEmailDomain = {
   verificationRecords: { Domain: { type: "TXT", name: "@", value: "proof" }, SPF: { type: "TXT", name: "@", value: "spf" } },
   verificationStates: { Domain: { status: "Verified" }, SPF: { status: "Verified" } },
   updatedAt: "2026-11-03T00:00:00.000Z",
+  providerErrorStatus: null, providerErrorCode: null, providerRequestId: null, providerErrorAt: null,
 };
 
 test("creates a sender identity only for a fully verified linked domain", async () => {
@@ -81,5 +82,5 @@ function harness(domain = verifiedDomain) {
       return { id: `sender-resource-${username}`, username, displayName: "Updates", provisioningState: remoteState };
     },
   } as unknown as AzureCommunicationDomains;
-  return { service: createTenantSenderService(domains, repository, provider), provisioned, saved, set pending(value: boolean) { pending = value; }, set remoteState(value: string) { remoteState = value; } };
+  return { service: createTenantSenderService(domains, repository, { "acs-email": provider }), provisioned, saved, set pending(value: boolean) { pending = value; }, set remoteState(value: string) { remoteState = value; } };
 }

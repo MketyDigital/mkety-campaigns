@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEmailCampaignWorker, type CampaignDeliveryJob, type CampaignDeliveryRepository } from "./delivery.js";
-import type { EmailProvider } from "../email/providers.js";
+import { EmailProviderRequestError, type EmailProvider } from "../email/providers.js";
 
 const job: CampaignDeliveryJob = {
   id: "job-1", tenantId: "tenant-1", campaignId: "campaign-1", contactId: "contact-1",
@@ -42,6 +42,34 @@ test("campaign worker marks provider errors uncertain and never retries automati
   assert.equal(await worker.processOne(), false);
   assert.equal(attempts, 1);
   assert.equal(repository.uncertain[0]?.id, job.id);
+});
+
+test("campaign worker falls back once only after a definitive provider rejection", async () => {
+  const repository = fakeRepository({ async claimNext() { return { ...job, fallbackProvider: "oci-email-delivery" }; } });
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  const primary = fakeProvider({ async send() { primaryCalls++; throw new EmailProviderRequestError("acs-email", 401, "Unauthorized", "rejected"); } });
+  const fallback: EmailProvider = { name: "oci-email-delivery", async send() { fallbackCalls++; return { provider: "oci-email-delivery", acceptedAt: "2026-11-03T12:00:00.000Z" }; } };
+
+  await createEmailCampaignWorker(repository, [primary, fallback], true).processOne();
+
+  assert.equal(primaryCalls, 1);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(repository.accepted.length, 1);
+  assert.equal(repository.uncertain.length, 0);
+});
+
+test("campaign worker never falls back after an ambiguous provider response", async () => {
+  const repository = fakeRepository({ async claimNext() { return { ...job, fallbackProvider: "oci-email-delivery" }; } });
+  let fallbackCalls = 0;
+  const primary = fakeProvider({ async send() { throw new EmailProviderRequestError("acs-email", 503, "ServiceUnavailable", "unknown"); } });
+  const fallback: EmailProvider = { name: "oci-email-delivery", async send() { fallbackCalls++; return { provider: "oci-email-delivery", acceptedAt: "2026-11-03T12:00:00.000Z" }; } };
+
+  await createEmailCampaignWorker(repository, [primary, fallback], true).processOne();
+
+  assert.equal(fallbackCalls, 0);
+  assert.equal(repository.accepted.length, 0);
+  assert.equal(repository.uncertain.length, 1);
 });
 
 test("campaign worker routes a sender through its stored OCI adapter", async () => {

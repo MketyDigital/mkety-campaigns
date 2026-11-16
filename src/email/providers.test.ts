@@ -5,6 +5,7 @@ import {
   createOptionalEmailProviders,
   createOciEmailProvider,
   createSelectedEmailProvider,
+  EmailProviderRequestError,
   type CampaignEmail,
 } from "./providers.js";
 
@@ -127,8 +128,31 @@ test("providers surface service failures without echoing credentials", async () 
     connectionString: "endpoint=https://example.communication.azure.com;accesskey=dG9wLXNlY3JldA==",
     fetcher: async () => new Response("provider rejected request", { status: 401 }),
   });
-  await assert.rejects(provider.send(message), /ACS email request failed \(401\)/);
-  await assert.rejects(provider.send(message), (error: Error) => !error.message.includes("top-secret"));
+  await assert.rejects(provider.send(message), (error: unknown) => {
+    assert.ok(error instanceof EmailProviderRequestError);
+    assert.equal(error.status, 401);
+    assert.equal(error.disposition, "rejected");
+    assert.equal(error.provider, "acs-email");
+    assert.doesNotMatch(error.message, /top-secret|provider rejected request/i);
+    return true;
+  });
+});
+
+test("provider responses classify only explicit non-timeout client rejections as safe for fallback", async () => {
+  for (const status of [400, 401, 403, 404, 422, 429]) {
+    const provider = createAcsEmailProvider({
+      connectionString: "endpoint=https://example.communication.azure.com;accesskey=YQ==",
+      fetcher: async () => new Response(JSON.stringify({ error: { code: "InvalidRequest" } }), { status }),
+    });
+    await assert.rejects(provider.send(message), (error: unknown) => error instanceof EmailProviderRequestError && error.disposition === "rejected");
+  }
+  for (const status of [408, 409, 500, 502, 503]) {
+    const provider = createAcsEmailProvider({
+      connectionString: "endpoint=https://example.communication.azure.com;accesskey=YQ==",
+      fetcher: async () => new Response(JSON.stringify({ error: { code: "Unknown" } }), { status }),
+    });
+    await assert.rejects(provider.send(message), (error: unknown) => error instanceof EmailProviderRequestError && error.disposition === "unknown");
+  }
 });
 
 test("email providers remain disabled without credentials and reject partial setup", () => {

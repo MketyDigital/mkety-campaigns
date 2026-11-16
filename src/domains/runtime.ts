@@ -50,6 +50,25 @@ export function createOptionalEmailDomainProvider(env: AzureDomainEnvironment): 
   return createOptionalAzureDomainProvider(env);
 }
 
+/** Creates only the control-plane adapters with complete runtime credentials. */
+export function createOptionalEmailDomainProviders(
+  env: AzureDomainEnvironment,
+): Partial<Record<"acs-email" | "oci-email-delivery", AzureCommunicationDomains>> {
+  const providers: Partial<Record<"acs-email" | "oci-email-delivery", AzureCommunicationDomains>> = {};
+  const azureKeys = REQUIRED_KEYS.filter((key) => Boolean(env[key]?.trim()));
+  if (azureKeys.length > 0) providers["acs-email"] = createOptionalAzureDomainProvider(env);
+  const ociKeys = ["OCI_EMAIL_REGION", "OCI_EMAIL_TENANCY_OCID", "OCI_EMAIL_USER_OCID", "OCI_EMAIL_FINGERPRINT", "OCI_EMAIL_PRIVATE_KEY", "OCI_EMAIL_COMPARTMENT_OCID"] as const;
+  if (ociKeys.some((key) => Boolean(env[key]?.trim()))) {
+    const missing = ociKeys.filter((key) => !env[key]?.trim());
+    if (missing.length) throw new Error("OCI Email Delivery domain management configuration is incomplete");
+    providers["oci-email-delivery"] = createOciEmailDomains({
+      region: env.OCI_EMAIL_REGION!, tenancyOcid: env.OCI_EMAIL_TENANCY_OCID!, userOcid: env.OCI_EMAIL_USER_OCID!,
+      fingerprint: env.OCI_EMAIL_FINGERPRINT!, privateKey: env.OCI_EMAIL_PRIVATE_KEY!, compartmentOcid: env.OCI_EMAIL_COMPARTMENT_OCID!,
+    });
+  }
+  return providers;
+}
+
 export function createOptionalAzureDomainProvider(env: AzureDomainEnvironment): AzureCommunicationDomains | undefined {
   const configured = REQUIRED_KEYS.filter((key) => Boolean(env[key]?.trim()));
   if (configured.length === 0) return undefined;

@@ -9,11 +9,13 @@ export class TestSenderUnavailableError extends Error {
   constructor() { super("Sender is not ready for test delivery"); this.name = "TestSenderUnavailableError"; }
 }
 
-export function createEmailTestSender(repository: SenderRepository, provider: EmailProvider): EmailTestSender {
+export function createEmailTestSender(repository: SenderRepository, providers: EmailProvider | EmailProvider[]): EmailTestSender {
+  const configuredProviders = Array.isArray(providers) ? providers : [providers];
   return {
     async sendToAccountOwner(tenantId, senderId, accountEmail) {
       const sender = await repository.get(tenantId, senderId);
-      if (!sender || sender.status !== "ready" || sender.provider !== provider.name) throw new TestSenderUnavailableError();
+      const provider = sender ? configuredProviders.find((item) => item.name === sender.provider) : undefined;
+      if (!sender || sender.status !== "ready" || !provider) throw new TestSenderUnavailableError();
       const recipient = accountEmail.trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) throw new TestSenderUnavailableError();
       return provider.send({

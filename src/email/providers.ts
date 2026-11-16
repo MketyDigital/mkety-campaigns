@@ -24,6 +24,20 @@ export interface EmailProvider {
   send(message: CampaignEmail): Promise<EmailSendResult>;
 }
 
+/** Provider response is a rejection only when the HTTP response proves it never accepted the send. */
+export class EmailProviderRequestError extends Error {
+  constructor(
+    readonly provider: EmailSendResult["provider"],
+    readonly status: number,
+    readonly providerCode: string,
+    readonly disposition: "rejected" | "unknown",
+    readonly requestId?: string,
+  ) {
+    super(`${provider} request failed with HTTP ${status} (${providerCode})`);
+    this.name = "EmailProviderRequestError";
+  }
+}
+
 type Fetcher = typeof fetch;
 
 export function createAcsEmailProvider(config: {
@@ -76,7 +90,10 @@ export function createAcsEmailProvider(config: {
         body,
       });
       const payload = await readJson(response);
-      if (!response.ok) throw providerError("ACS email", response.status, payload);
+      if (!response.ok) {
+        const providerErrorBody = objectField(payload, "error");
+        throw providerError("acs-email", response.status, payload, response.headers.get("x-ms-error-code") ?? (providerErrorBody ? stringField(providerErrorBody, "code") : undefined), response.headers.get("x-ms-request-id") ?? response.headers.get("x-ms-correlation-request-id"));
+      }
       return {
         provider: "acs-email",
         providerMessageId: stringField(payload, "id") ?? headerValue(response, "operation-location"),
@@ -161,7 +178,7 @@ export function createOciEmailProvider(config: {
         body,
       });
       const payload = await readJson(response);
-      if (!response.ok) throw providerError("OCI Email Delivery", response.status, payload);
+      if (!response.ok) throw providerError("oci-email-delivery", response.status, payload, stringField(payload, "code"), response.headers.get("opc-request-id"));
       return {
         provider: "oci-email-delivery",
         providerMessageId: stringField(payload, "messageId") ?? stringField(payload, "id"),
@@ -279,7 +296,21 @@ function headerValue(response: Response, key: string): string | undefined {
   return response.headers.get(key) ?? undefined;
 }
 
-function providerError(provider: string, status: number, payload: Record<string, unknown>): Error {
-  const code = stringField(payload, "code") ?? "request_failed";
-  return new Error(`${provider} request failed (${status}): ${code}`);
+function providerError(
+  provider: EmailSendResult["provider"],
+  status: number,
+  payload: Record<string, unknown>,
+  responseCode: string | undefined,
+  requestId: string | null,
+): EmailProviderRequestError {
+  const rawCode = responseCode ?? stringField(payload, "code") ?? "request_failed";
+  const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : "provider_error";
+  const safeRequestId = requestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(requestId) ? requestId : undefined;
+  const disposition = status >= 400 && status < 500 && status !== 408 && status !== 409 ? "rejected" : "unknown";
+  return new EmailProviderRequestError(provider, status, code, disposition, safeRequestId);
+}
+
+function objectField(value: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const field = value[key];
+  return typeof field === "object" && field !== null && !Array.isArray(field) ? field as Record<string, unknown> : undefined;
 }

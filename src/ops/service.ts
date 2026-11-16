@@ -13,6 +13,18 @@ export type OpsWorkspaceOverview = {
   domainReadiness: { total: number; ready: number; pending: number };
   senderReadiness: { total: number; ready: number; pending: number };
 };
+export type OpsDomainFailure = {
+  id: string;
+  tenantId: string;
+  workspaceName: string;
+  domainName: string;
+  provider: "acs-email" | "oci-email-delivery";
+  provisioningState: string;
+  providerErrorStatus: number | null;
+  providerErrorCode: string | null;
+  providerRequestId: string | null;
+  providerErrorAt: string | null;
+};
 
 export interface OperationsService {
   createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning, actorId?: string): Promise<{ inviteUrl: string }>;
@@ -23,6 +35,8 @@ export interface OperationsService {
   listInvitations?(): Promise<Array<{ id: string; tenantId: string; tenantName: string; email: string; status: string; expiresAt: string; acceptedAt: string | null }>>;
   rotateInvitation?(id: string, actorId: string): Promise<{ inviteUrl: string } | null>;
   revokeInvitation?(id: string, actorId: string): Promise<boolean>;
+  listDomainFailures?(): Promise<OpsDomainFailure[]>;
+  recordDomainProviderRetry?(id: string, fromProvider: string, toProvider: string, outcome: string, actorId: string): Promise<void>;
 }
 
 type InvitationRow = { id: string; tenant_id: string; email: string };
@@ -152,6 +166,34 @@ export class PostgresOperationsService implements OperationsService {
       expiresAt:row.expires_at?new Date(row.expires_at).toISOString():null,
       maxCampaignRecipients:row.max_campaign_recipients,maxDailyEmailRecipients:row.max_daily_email_recipients,
       createdAt:new Date(row.created_at).toISOString(),ownerEmail:row.owner_email??null,pendingInviteCount:row.pending_invite_count}));
+  }
+
+  async listDomainFailures(): Promise<OpsDomainFailure[]> {
+    const result = await this.database.query<any>(
+      `SELECT d.id,d.tenant_id,t.name AS workspace_name,d.domain_name,d.provider,d.provisioning_state,
+              d.provider_error_status,d.provider_error_code,d.provider_request_id,d.provider_error_at
+         FROM tenant_email_domains d JOIN tenants t ON t.id=d.tenant_id
+        WHERE d.provisioning_state IN ('Failed','Unknown')
+        ORDER BY d.updated_at DESC LIMIT 200`,
+    );
+    return result.rows.map((row: any) => ({
+      id: row.id, tenantId: row.tenant_id, workspaceName: row.workspace_name, domainName: row.domain_name,
+      provider: row.provider, provisioningState: row.provisioning_state,
+      providerErrorStatus: row.provider_error_status === null ? null : Number(row.provider_error_status),
+      providerErrorCode: row.provider_error_code ?? null, providerRequestId: row.provider_request_id ?? null,
+      providerErrorAt: row.provider_error_at ? new Date(row.provider_error_at).toISOString() : null,
+    }));
+  }
+
+  async recordDomainProviderRetry(id: string, fromProvider: string, toProvider: string, outcome: string, actorId: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw new Error("Invalid domain reference");
+    const allowedProviders = new Set(["acs-email", "oci-email-delivery"]);
+    if (!allowedProviders.has(fromProvider) || !allowedProviders.has(toProvider)) throw new Error("Invalid provider");
+    const safeOutcome = ["started", "confirmed-existing", "fallback-started", "fallback-succeeded", "fallback-failed", "blocked"].includes(outcome) ? outcome : "blocked";
+    await this.database.query(
+      "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'email_domain_provider_retry',$2)",
+      [actorId, JSON.stringify({ domainId: id, fromProvider, toProvider, outcome: safeOutcome })],
+    );
   }
 
   async updateWorkspace(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null> {

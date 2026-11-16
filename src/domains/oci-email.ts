@@ -1,4 +1,4 @@
-import { normalizeDomain, type AzureCommunicationDomains, type AzureDomainState, type AzureSenderUsernameState } from "./azure-arm.js";
+import { EmailDomainProviderError, normalizeDomain, type AzureCommunicationDomains, type AzureDomainState, type AzureSenderUsernameState } from "./azure-arm.js";
 import { importOciRsaPrivateKey } from "../email/oci-crypto.js";
 
 export type OciEmailDomainsConfig = {
@@ -56,7 +56,14 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
     });
     let payload: Record<string, unknown> = {};
     try { payload = await response.json() as Record<string, unknown>; } catch { /* OCI may return an empty response. */ }
-    if (!response.ok) throw new Error(`OCI Email Delivery control-plane request failed with HTTP ${response.status}`);
+    if (!response.ok) {
+      const nestedError = objectField(payload, "error");
+      const rawCode = stringField(payload, "code") ?? stringField(nestedError, "code") ?? "request_failed";
+      const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode) ? rawCode : "provider_error";
+      const requestId = response.headers.get("opc-request-id") ?? undefined;
+      const safeRequestId = requestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(requestId) ? requestId : undefined;
+      throw new EmailDomainProviderError("oci-email-delivery", response.status, code, safeRequestId);
+    }
     return payload;
   }
 

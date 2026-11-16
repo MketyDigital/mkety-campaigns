@@ -67,6 +67,12 @@ Provisioning keeps email test sends, campaign sends, SMS, and OCI backup disable
 - [ ] Verify owned sender domains, SPF/DKIM/DMARC, approved sender identity, and delivery/opt-out behavior without relaxing sends gates.
 - [ ] Keep `EMAIL_CAMPAIGN_SEND_ENABLED=false` until all live-campaign gates pass. The fixed account-owner test-send gate is separate and may be enabled temporarily in the existing workspace only after the provider credentials and domain-management access are configured, the owner is signed in with MFA, and a sender is ready; disable `EMAIL_TEST_SEND_ENABLED` after the owner confirms the inbox check. SMS and OCI backup remain disabled. A one-recipient campaign pilot still requires separate verification and approval.
 
+## Email provider routing follow-up
+
+- Ops can select configured ACS/OCI providers for new domain setup and choose one distinct send fallback. Fallback requires an explicit definitive rejection, an enabled provider adapter, and a ready same-tenant sender using the identical From address. Ambiguous delivery outcomes remain uncertain for reconciliation.
+- Ops domain diagnostics retain sanitized provider status/code/request ID. Cross-provider domain retry checks the original provider and changes provider only after a confirmed 404.
+- PostgreSQL migrations 0104–0106 are required before deployment. Migration 0106 scopes domain and sender uniqueness per provider so a tenant can have the same ready From address on both providers. Existing campaign/test send gates remain unchanged and must stay off unless separately authorized.
+
 ## P1 customer and operating features
 
 - [ ] Template editor, safe HTML/text preview and segmentation with campaign exclusions.
