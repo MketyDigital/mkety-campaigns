@@ -52,6 +52,7 @@ test("OCI email domain adapter creates a domain and DKIM key, exposes DNS instru
   assert.equal(retriedSender.id, "sender-1");
   assert.equal(calls.filter((request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/senders")).length, 1);
   assert.ok(calls.every((request) => request.headers.get("authorization")?.startsWith('Signature version="1"')));
+  assert.ok(calls.every((request) => new URL(request.url).host === "ctrl.email.eu-frankfurt-1.oci.oraclecloud.com"));
   const senderRequest = calls.find((request) => request.method === "POST" && new URL(request.url).pathname.endsWith("/senders"));
   assert.deepEqual(await senderRequest?.json(), { compartmentId: "compartment", emailAddress: "info@mail.example.com" });
 });
