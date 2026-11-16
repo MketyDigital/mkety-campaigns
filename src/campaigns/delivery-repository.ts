@@ -8,6 +8,15 @@ export interface CampaignDispatchRepository extends CampaignDeliveryRepository {
   getOpsControlStatus?(): Promise<{ emailEmergencyStop: boolean }>;
   setEmergencyStop?(paused: boolean, actorUserId: string): Promise<void>;
   isEmergencyStopActive?(): Promise<boolean>;
+  getEmailProviderRouting?(): Promise<EmailProviderRouting>;
+  setEmailProviderRouting?(primaryProvider: EmailProviderName, fallbackProvider: EmailProviderName | null, actorId: string): Promise<EmailProviderRouting>;
+}
+
+export type EmailProviderName = "acs-email" | "oci-email-delivery";
+export type EmailProviderRouting = { primaryProvider: EmailProviderName | null; fallbackProvider: EmailProviderName | null; availableProviders: EmailProviderName[]; domainSetupProviders: EmailProviderName[] };
+
+export class EmailProviderPolicyError extends Error {
+  constructor(message: string) { super(message); this.name = "EmailProviderPolicyError"; }
 }
 
 export class CampaignDispatchConflictError extends Error {
@@ -15,10 +24,57 @@ export class CampaignDispatchConflictError extends Error {
 }
 
 export class PostgresCampaignDispatchRepository implements CampaignDispatchRepository {
-  constructor(private readonly database: PostgresPool, private readonly publicBaseUrl: string, private readonly dailyRecipientLimit = 1000, private readonly providerMinIntervalMs = 1000) {
+  constructor(
+    private readonly database: PostgresPool,
+    private readonly publicBaseUrl: string,
+    private readonly dailyRecipientLimit = 1000,
+    private readonly providerMinIntervalMs = 1000,
+    private readonly configuredProviders: EmailProviderName[] = [],
+    private readonly defaultProvider: EmailProviderName | null = null,
+    private readonly configuredDomainProviders: EmailProviderName[] = configuredProviders,
+  ) {
     validateDispatchSettings(publicBaseUrl);
     normalizeDailyRecipientLimit(dailyRecipientLimit);
     if (!Number.isInteger(providerMinIntervalMs) || providerMinIntervalMs < 250 || providerMinIntervalMs > 60_000) throw new Error("EMAIL_PROVIDER_MIN_INTERVAL_MS must be between 250 and 60000");
+  }
+
+  async getEmailProviderRouting(): Promise<EmailProviderRouting> {
+    const result = await this.database.query<{ primary_email_provider: EmailProviderName | null; fallback_email_provider: EmailProviderName | null }>(
+      "SELECT primary_email_provider,fallback_email_provider FROM campaign_ops_controls WHERE id=TRUE",
+    );
+    const row = result.rows[0];
+    const primaryProvider = row?.primary_email_provider ?? (this.defaultProvider && this.configuredProviders.includes(this.defaultProvider) ? this.defaultProvider : null);
+    const fallbackProvider = row?.fallback_email_provider && this.configuredProviders.includes(row.fallback_email_provider) ? row.fallback_email_provider : null;
+    return { primaryProvider, fallbackProvider, availableProviders: [...this.configuredProviders], domainSetupProviders: [...this.configuredDomainProviders] };
+  }
+
+  async setEmailProviderRouting(primaryProvider: EmailProviderName, fallbackProvider: EmailProviderName | null, actorId: string): Promise<EmailProviderRouting> {
+    if (!this.configuredProviders.includes(primaryProvider)) throw new EmailProviderPolicyError("Primary email provider is not configured for sending");
+    if (!this.configuredDomainProviders.includes(primaryProvider)) throw new EmailProviderPolicyError("Primary email provider is not configured for domain setup");
+    if (fallbackProvider !== null && !this.configuredProviders.includes(fallbackProvider)) throw new EmailProviderPolicyError("Fallback email provider is not configured");
+    if (fallbackProvider === primaryProvider) throw new EmailProviderPolicyError("Fallback provider must differ from primary provider");
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO campaign_ops_controls (id,primary_email_provider,fallback_email_provider,updated_at,updated_by)
+         VALUES (TRUE,$1,$2,NOW(),$3)
+         ON CONFLICT (id) DO UPDATE SET primary_email_provider=EXCLUDED.primary_email_provider,
+           fallback_email_provider=EXCLUDED.fallback_email_provider,updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
+        [primaryProvider, fallbackProvider, actorId],
+      );
+      await client.query(
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'email_provider_routing_updated',$2)",
+        [actorId, JSON.stringify({ primaryProvider, fallbackProvider })],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+    return this.getEmailProviderRouting();
   }
 
   async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean }> {
@@ -129,11 +185,15 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       await client.query(suppressIneligibleJobsSql("NOW()"));
       const result = await client.query<DeliveryJobRow>(
         `SELECT cj.id, cj.tenant_id, cj.campaign_id, cj.contact_id, cj.idempotency_key,
-                si.sender_address, si.provider, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token
+                si.sender_address, si.provider, ct.email, c.subject, c.body_text, c.body_html, ut.token AS unsubscribe_token,
+                CASE WHEN fallback_si.id IS NOT NULL THEN ops.fallback_email_provider ELSE NULL END AS fallback_provider
            FROM campaign_jobs cj
            JOIN campaigns c ON c.id = cj.campaign_id AND c.tenant_id = cj.tenant_id
            JOIN contacts ct ON ct.id = cj.contact_id AND ct.tenant_id = cj.tenant_id
            JOIN tenant_sender_identities si ON si.id = c.sender_identity_id AND si.tenant_id = cj.tenant_id
+           LEFT JOIN campaign_ops_controls ops ON ops.id=TRUE
+           LEFT JOIN tenant_sender_identities fallback_si ON fallback_si.tenant_id=cj.tenant_id
+             AND fallback_si.sender_address=si.sender_address AND fallback_si.provider=ops.fallback_email_provider AND fallback_si.status='ready'
           JOIN tenants t ON t.id = cj.tenant_id AND t.status='approved' AND t.contract_started_at<=NOW() AND (t.expires_at IS NULL OR t.expires_at>NOW())
           JOIN unsubscribe_tokens ut ON ut.campaign_id = cj.campaign_id AND ut.contact_id = cj.contact_id AND ut.tenant_id = cj.tenant_id
           WHERE cj.status = 'queued' AND cj.available_at <= NOW() AND c.status = 'queued'
@@ -335,7 +395,7 @@ export class D1CampaignDispatchRepository implements CampaignDispatchRepository 
 }
 
 type DispatchCampaignRow = { id: string; tenant_id: string; channel: string; status: string; sender_identity_id: string | null; scheduled_at: string | Date | null; tenant_status: string; contract_started_at: Date | string; expires_at: Date | string | null; max_campaign_recipients: number; max_daily_email_recipients: number };
-type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; provider: "acs-email" | "oci-email-delivery"; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
+type DeliveryJobRow = { id: string; tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string; sender_address: string; provider: EmailProviderName; fallback_provider: EmailProviderName | null; email: string; subject: string; body_text: string; body_html: string | null; unsubscribe_token: string };
 type DeliveryStateRow = { tenant_id: string; campaign_id: string; contact_id: string; idempotency_key: string };
 
 function assertQueueable(campaign: DispatchCampaignRow | null): asserts campaign is DispatchCampaignRow {
@@ -392,7 +452,8 @@ function suppressIneligibleJobsSql(now: string, sqlite = false): string {
 function mapDeliveryJob(row: DeliveryJobRow, unsubscribeUrl: string): CampaignDeliveryJob {
   return {
     id: row.id, tenantId: row.tenant_id, campaignId: row.campaign_id, contactId: row.contact_id,
-    idempotencyKey: row.idempotency_key, from: row.sender_address, provider: row.provider, to: row.email,
+    idempotencyKey: row.idempotency_key, from: row.sender_address, provider: row.provider,
+    ...(row.fallback_provider ? { fallbackProvider: row.fallback_provider } : {}), to: row.email,
     subject: row.subject, bodyText: row.body_text, ...(row.body_html ? { bodyHtml: row.body_html } : {}), unsubscribeUrl,
   };
 }

@@ -64,7 +64,7 @@ OCI_EMAIL_PRIVATE_KEY
 OCI_EMAIL_COMPARTMENT_OCID
 ```
 
-Sender addresses are selected per tenant from its verified domain configuration; they are not fixed deployment environment variables. Each sender record is tied to the provider that created it, and campaign jobs route using that stored provider. `EMAIL_PROVIDER` chooses which adapter new domain onboarding and owner test-send use; configure credentials for every provider that existing senders may use.
+Sender addresses are selected per tenant from its verified domain configuration; they are not fixed deployment environment variables. Each sender record is tied to the provider that created it. The same domain and From address can be configured once per provider, and campaign jobs route using the selected sender record. `EMAIL_PROVIDER` is the initial/default provider; MFA-enabled Ops can select a configured primary for new domain setup and an optional distinct fallback. Owner test sends use the provider saved on that ready sender. Configure credentials for every provider used by existing senders and for any selected fallback.
 
 The existing backup variables `AZURE_STORAGE_CONNECTION_STRING` and `OCI_OBJECT_STORAGE_*` are separate credentials for Azure Blob and OCI Object Storage. They are not interchangeable with these email provider credentials.
 
@@ -72,7 +72,7 @@ The existing backup variables `AZURE_STORAGE_CONNECTION_STRING` and `OCI_OBJECT_
 
 This test path can run in the existing Campaigns workspace. It is separate from campaign dispatch: keep `EMAIL_CAMPAIGN_SEND_ENABLED=false`, `SMS_ENABLED=false`, and `OCI_BACKUP_ENABLED=false`.
 
-1. In Coolify, select `EMAIL_PROVIDER=acs-email` or `EMAIL_PROVIDER=oci-email-delivery`, configure that provider's email and domain-management credentials, and set `EMAIL_TEST_SEND_ENABLED=true`.
+1. In Coolify, configure the email and domain-management credentials for the provider you will use, set `EMAIL_PROVIDER` to the initial default, and set `EMAIL_TEST_SEND_ENABLED=true`. Ops can then select a configured primary for domain setup. Owner test sends follow the selected ready sender’s provider.
 2. In Ops, create the MKETY workspace and invite an owner email account you control. Complete the invite, sign in with MFA, and finish account setup.
 3. Add a domain or subdomain you control in **Sender domains**, publish the DNS records shown in the workspace, and refresh verification until the domain is ready.
 4. In **Sender addresses**, create an address under that ready domain and refresh until its status reads `ready`.
@@ -86,4 +86,4 @@ The test action is unavailable while the sender is pending, the provider is unco
 
 After the sender test succeeds, create a contact for a mailbox you control and record its real, channel-specific consent evidence. Create an email draft, submit it for review, and approve it as an MFA-enabled Ops user. Set `EMAIL_CAMPAIGN_MAX_RECIPIENTS=1` and `EMAIL_CAMPAIGN_SEND_ENABLED=true` in the isolated test deployment, redeploy, then use the separate **Queue campaign delivery** action in Ops. The queue only includes contacts with current granted consent and no suppression. Check the inbox and provider status; turn the gate back off immediately after the test. A provider acceptance response means the selected provider accepted the message for processing, not guaranteed inbox delivery.
 
-Campaign workers route to ACS or OCI using the provider saved on each sender identity. A live send still requires a healthy deployed portal, verified sender domain, configured provider credentials, and an explicitly enabled test or campaign-send gate.
+Campaign workers route to ACS or OCI using the provider saved on each sender identity. Ops fallback is attempted at most once, and only after the primary provider returns an explicit non-timeout 4xx rejection; the same tenant must have a ready sender on the fallback with the exact same From address. Network errors, timeouts, 408/409, 5xx responses, and local acceptance-record failures remain uncertain and are never sent to a second provider automatically. The Ops domain retry checks the original provider and switches only after a confirmed 404. A live send still requires a healthy deployed portal, verified sender domain, configured provider credentials, and an explicitly enabled test or campaign-send gate.

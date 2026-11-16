@@ -4,7 +4,7 @@ import { Script } from "node:vm";
 import { createApp } from "./app.js";
 import type { TenantDomainService, TenantEmailDomain } from "./domains/service.js";
 import type { CampaignWorkspace } from "./campaigns/workspace.js";
-import type { CampaignDispatchRepository } from "./campaigns/delivery-repository.js";
+import { EmailProviderPolicyError, type CampaignDispatchRepository } from "./campaigns/delivery-repository.js";
 import type { OperationsService } from "./ops/service.js";
 import type { TenantSenderService, SenderIdentity } from "./domains/senders.js";
 import type { EmailTestSender } from "./email/test-send.js";
@@ -28,6 +28,10 @@ const sampleDomain: TenantEmailDomain = {
   verificationStates: { Domain: { status: "NotStarted" } },
   linked: false,
   updatedAt: "2026-11-01T00:00:00.000Z",
+  providerErrorStatus: null,
+  providerErrorCode: null,
+  providerRequestId: null,
+  providerErrorAt: null,
 };
 
 function fakeDomainService(overrides: Partial<TenantDomainService> = {}): TenantDomainService {
@@ -213,6 +217,9 @@ test("contacts and campaign pages are linked from the workspace", async () => {
   const opsHtml = await (await createApp(async () => true, operatorSecurity).request("/app/ops")).text();
   assert.match(opsHtml, /Campaigns awaiting review/);
   assert.match(opsHtml, /Approved email campaigns/);
+  assert.match(opsHtml, /Primary email provider/);
+  assert.match(opsHtml, /Fallback provider/);
+  assert.match(opsHtml, /Failed email domain setup/);
 });
 
 test("sign-in and required authenticator setup pages are available", async () => {
@@ -364,6 +371,97 @@ test("approved email delivery queueing requires its explicit runtime gate and MF
   assert.equal(response.status, 202);
   assert.deepEqual(queued, { id: "campaign-1", actor: "ops-1", limit: 50 });
   assert.deepEqual(await response.json(), { queued: 2, status: "queued" });
+});
+
+test("Ops provider routing exposes configured adapters and validates policy mutations", async () => {
+  let saved: unknown;
+  const dispatch = {
+    async getEmailProviderRouting() {
+      return { primaryProvider: "acs-email", fallbackProvider: null, availableProviders: ["acs-email", "oci-email-delivery"], domainSetupProviders: ["acs-email", "oci-email-delivery"] };
+    },
+    async setEmailProviderRouting(primaryProvider: string, fallbackProvider: string | null, actorId: string) {
+      saved = { primaryProvider, fallbackProvider, actorId };
+      if (!new Set(["acs-email", "oci-email-delivery"]).has(primaryProvider)) throw new Error("Email provider is not configured");
+      if (fallbackProvider === primaryProvider) throw new EmailProviderPolicyError("Fallback provider must differ from primary provider");
+      return { primaryProvider, fallbackProvider, availableProviders: ["acs-email", "oci-email-delivery"], domainSetupProviders: ["acs-email", "oci-email-delivery"] };
+    },
+    async claimNext() { return null; },
+    async markAccepted() {},
+    async markUncertain() {},
+  } as unknown as CampaignDispatchRepository;
+  const opsSecurity = {
+    ...activeSession,
+    operatorAuth: {
+      start: async () => new Response(null, { status: 302 }),
+      callback: async () => new Response(null, { status: 302 }),
+      session: async () => ({ id: "ops-1", email: "ops@example.com" }),
+      logout: async () => new Response(null, { status: 302 }),
+    },
+    trustedOrigins: ["https://campaign.mkety.com"],
+  };
+  const app = createApp(async () => true, opsSecurity, fakeDomainService(), fakeCampaignWorkspace(), undefined, undefined, undefined, dispatch);
+  const read = await app.request("/api/ops/email-providers");
+  assert.equal(read.status, 200);
+  const routing = await read.json();
+  assert.deepEqual(routing, {
+    primaryProvider: "acs-email", fallbackProvider: null,
+    availableProviders: ["acs-email", "oci-email-delivery"], domainSetupProviders: ["acs-email", "oci-email-delivery"],
+  });
+  assert.doesNotMatch(JSON.stringify(routing), /connection.?string|private.?key|secret/i);
+
+  const invalid = await app.request("/api/ops/email-providers", {
+    method: "PATCH", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" },
+    body: JSON.stringify({ primaryProvider: "acs-email", fallbackProvider: "acs-email" }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(saved, { primaryProvider: "acs-email", fallbackProvider: "acs-email", actorId: "ops-1" });
+
+  const changed = await app.request("/api/ops/email-providers", {
+    method: "PATCH", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" },
+    body: JSON.stringify({ primaryProvider: "oci-email-delivery", fallbackProvider: "acs-email" }),
+  });
+  assert.equal(changed.status, 200);
+  assert.deepEqual(saved, { primaryProvider: "oci-email-delivery", fallbackProvider: "acs-email", actorId: "ops-1" });
+});
+
+test("Ops domain diagnostics omit DNS records and fallback action uses only the configured alternate", async () => {
+  let requestedProvider: string | undefined;
+  const domains = fakeDomainService({
+    async retryFailedOnProvider(id, provider) {
+      assert.equal(id, "domain-failure-1");
+      requestedProvider = provider;
+      return { ...sampleDomain, id, provider, provisioningState: "Running", verificationRecords: { Domain: { type: "TXT", name: "@", value: "dns-secret" } } };
+    },
+  });
+  const operations = {
+    async listDomainFailures() {
+      return [{ id: "domain-failure-1", tenantId: "tenant-1", workspaceName: "MKETY", domainName: "email.mkety.com", provider: "acs-email", provisioningState: "Failed", providerErrorStatus: 403, providerErrorCode: "AuthorizationFailed", providerRequestId: "trace-123", providerErrorAt: null }];
+    },
+    async recordDomainProviderRetry() {},
+  } as unknown as OperationsService;
+  const dispatch = {
+    async getEmailProviderRouting() { return { primaryProvider: "acs-email", fallbackProvider: "oci-email-delivery", availableProviders: ["acs-email", "oci-email-delivery"], domainSetupProviders: ["acs-email", "oci-email-delivery"] }; },
+    async claimNext() { return null; }, async markAccepted() {}, async markUncertain() {},
+  } as unknown as CampaignDispatchRepository;
+  const opsSecurity = {
+    ...activeSession,
+    operatorAuth: { start: async () => new Response(null, { status: 302 }), callback: async () => new Response(null, { status: 302 }), session: async () => ({ id: "ops-1", email: "ops@example.com" }), logout: async () => new Response(null, { status: 302 }) },
+    trustedOrigins: ["https://campaign.mkety.com"],
+  };
+  const app = createApp(async () => true, opsSecurity, domains, fakeCampaignWorkspace(), operations, undefined, undefined, dispatch);
+  const listing = await app.request("/api/ops/email-domains/failures");
+  assert.equal(listing.status, 200);
+  const body = await listing.text();
+  assert.match(body, /AuthorizationFailed/);
+  assert.doesNotMatch(body, /dns-secret|verificationRecords|verification_records_json/);
+  const retry = await app.request("/api/ops/email-domains/domain-failure-1/retry-with-fallback", {
+    method: "POST", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" }, body: "{}",
+  });
+  assert.equal(retry.status, 200);
+  assert.equal(requestedProvider, "oci-email-delivery");
+  const result = await retry.text();
+  assert.match(result, /dnsRecordsAvailable/);
+  assert.doesNotMatch(result, /dns-secret/);
 });
 
 test("contact consent withdrawal is tenant-scoped and suppresses the selected channel", async () => {

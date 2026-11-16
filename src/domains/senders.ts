@@ -41,9 +41,12 @@ export class SenderInputError extends Error {
 export function createTenantSenderService(
   domains: DomainRepository,
   repository: SenderRepository,
-  provider: AzureCommunicationDomains,
+  provider: AzureCommunicationDomains | Partial<Record<SenderIdentity["provider"], AzureCommunicationDomains>>,
   providerName: SenderIdentity["provider"] = "acs-email",
 ): TenantSenderService {
+  const providerMap: Partial<Record<SenderIdentity["provider"], AzureCommunicationDomains>> = "createDomain" in provider
+    ? { [providerName]: provider as AzureCommunicationDomains }
+    : provider;
   return {
     list: (tenantId) => repository.list(tenantId),
     get: (tenantId, id) => repository.get(tenantId, id),
@@ -52,11 +55,12 @@ export function createTenantSenderService(
       if (!sender) return null;
       if (sender.status === "ready") return sender;
       const domain = await domains.get(tenantId, sender.domainId);
-      if (!domain || domain.provider !== providerName || !isReady(domain)) throw new SenderDomainNotReadyError();
+      const activeProvider = domain ? providerMap[domain.provider] : undefined;
+      if (!domain || !activeProvider || !isReady(domain)) throw new SenderDomainNotReadyError();
       const username = sender.senderAddress.slice(0, sender.senderAddress.lastIndexOf("@"));
       let remote;
       try {
-        remote = await provider.getSenderUsername(normalizeDomain(domain.domainName), username);
+        remote = await activeProvider.getSenderUsername(normalizeDomain(domain.domainName), username);
       } catch {
         throw new SenderProvisioningError();
       }
@@ -65,7 +69,8 @@ export function createTenantSenderService(
     },
     async create(tenantId, domainId, username, displayName) {
       const domain = await domains.get(tenantId, domainId);
-      if (!domain || domain.provider !== providerName || !isReady(domain)) throw new SenderDomainNotReadyError();
+      const activeProvider = domain ? providerMap[domain.provider] : undefined;
+      if (!domain || !activeProvider || !isReady(domain)) throw new SenderDomainNotReadyError();
       const localPart = username.trim().toLowerCase();
       if (!/^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/.test(localPart)) {
         throw new SenderInputError("Enter a valid sender username");
@@ -74,7 +79,7 @@ export function createTenantSenderService(
       if (!name || name.length > 100) throw new SenderInputError("Enter a display name between 1 and 100 characters");
       let remote;
       try {
-        remote = await provider.createSenderUsername(normalizeDomain(domain.domainName), localPart, name);
+        remote = await activeProvider.createSenderUsername(normalizeDomain(domain.domainName), localPart, name);
       } catch {
         throw new SenderProvisioningError();
       }
@@ -83,7 +88,7 @@ export function createTenantSenderService(
         id: crypto.randomUUID(), tenantId, domainId,
         senderAddress: `${localPart}@${domain.domainName}`,
         displayName: remote.displayName || name,
-        provider: providerName, status: state,
+        provider: domain.provider, status: state,
         createdAt: new Date().toISOString(),
       });
     },

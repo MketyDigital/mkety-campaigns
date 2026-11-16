@@ -26,6 +26,17 @@ test("test send uses only the verified server-side sender and the signed-in user
   });
 });
 
+test("test send follows the configured provider for the verified sender identity", async () => {
+  let selected = "";
+  const service = createEmailTestSender(senderRepository({ ...sender, provider: "oci-email-delivery" }), [
+    { name: "acs-email", async send() { throw new Error("wrong provider must not send"); } },
+    { name: "oci-email-delivery", async send() { selected = "oci-email-delivery"; return { provider: "oci-email-delivery", acceptedAt: new Date().toISOString() }; } },
+  ] as EmailProvider[]);
+  const result = await service.sendToAccountOwner("tenant-1", "sender-1", "owner@example.com");
+  assert.equal(selected, "oci-email-delivery");
+  assert.equal(result.provider, "oci-email-delivery");
+});
+
 test("test send rejects pending senders, other tenants, and invalid account email", async () => {
   const provider = { name: "acs-email", async send() { throw new Error("must not send"); } } as unknown as EmailProvider;
   await assert.rejects(createEmailTestSender(senderRepository({ ...sender, status: "pending" }), provider).sendToAccountOwner("tenant-1", "sender-1", "owner@example.com"), /not ready/i);

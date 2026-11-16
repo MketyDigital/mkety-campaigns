@@ -17,15 +17,22 @@ type DomainRow = {
   verification_states_json: string;
   linked: boolean | number;
   updated_at: Date | string;
+  provider_error_status: number | null;
+  provider_error_code: string | null;
+  provider_request_id: string | null;
+  provider_error_at: Date | string | null;
 };
+
+const DOMAIN_FIELDS = `id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
+  verification_records_json, verification_states_json, linked, updated_at,
+  provider_error_status, provider_error_code, provider_request_id, provider_error_at`;
 
 export class PostgresDomainRepository implements DomainRepository {
   constructor(private readonly database: PostgresQueryable) {}
 
   async list(tenantId: string): Promise<TenantEmailDomain[]> {
     const result = await this.database.query<DomainRow>(
-      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-              verification_records_json, verification_states_json, linked, updated_at
+      `SELECT ${DOMAIN_FIELDS}
          FROM tenant_email_domains WHERE tenant_id = $1 ORDER BY created_at DESC`,
       [tenantId],
     );
@@ -34,12 +41,32 @@ export class PostgresDomainRepository implements DomainRepository {
 
   async get(tenantId: string, id: string): Promise<TenantEmailDomain | null> {
     const result = await this.database.query<DomainRow>(
-      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-              verification_records_json, verification_states_json, linked, updated_at
+      `SELECT ${DOMAIN_FIELDS}
          FROM tenant_email_domains WHERE tenant_id = $1 AND id = $2 LIMIT 1`,
       [tenantId, id],
     );
     return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
+
+  async getById(id: string): Promise<TenantEmailDomain | null> {
+    const result = await this.database.query<DomainRow>(`SELECT ${DOMAIN_FIELDS} FROM tenant_email_domains WHERE id=$1 LIMIT 1`, [id]);
+    return result.rows[0] ? mapRow(result.rows[0]) : null;
+  }
+
+  async switchProviderIfFailed(id: string, from: TenantEmailDomain["provider"], to: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null> {
+    try {
+      const result = await this.database.query<DomainRow>(
+        `UPDATE tenant_email_domains SET provider=$3,provisioning_state='Pending',azure_resource_id=NULL,
+           verification_records_json='{}',verification_states_json='{}',provider_error_status=NULL,
+           provider_error_code=NULL,provider_request_id=NULL,provider_error_at=NULL,updated_at=NOW()
+         WHERE id=$1 AND provider=$2 AND provisioning_state='Failed' RETURNING ${DOMAIN_FIELDS}`,
+        [id, from, to],
+      );
+      return result.rows[0] ? mapRow(result.rows[0]) : null;
+    } catch (error) {
+      if (isPostgresUniqueViolation(error)) return null;
+      throw error;
+    }
   }
 
   async insertPending(domain: NewTenantEmailDomain): Promise<TenantEmailDomain> {
@@ -47,8 +74,7 @@ export class PostgresDomainRepository implements DomainRepository {
       const result = await this.database.query<DomainRow>(
         `INSERT INTO tenant_email_domains (id, tenant_id, domain_name, provider)
          VALUES ($1, $2, $3, $4)
-         RETURNING id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-                   verification_records_json, verification_states_json, linked, updated_at`,
+         RETURNING ${DOMAIN_FIELDS}`,
         [domain.id, domain.tenantId, domain.domainName, domain.provider],
       );
       if (!result.rows[0]) throw new Error("Domain insert did not return a row");
@@ -67,11 +93,14 @@ export class PostgresDomainRepository implements DomainRepository {
               verification_records_json = $5,
               verification_states_json = $6,
               linked = $7,
+              provider_error_status = $8,
+              provider_error_code = $9,
+              provider_request_id = $10,
+              provider_error_at = $11,
               updated_at = NOW()
         WHERE tenant_id = $1 AND id = $2
-        RETURNING id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-                  verification_records_json, verification_states_json, linked, updated_at`,
-      [tenantId, id, state.azureResourceId, state.provisioningState, JSON.stringify(state.verificationRecords), JSON.stringify(state.verificationStates), state.linked],
+        RETURNING ${DOMAIN_FIELDS}`,
+      [tenantId, id, state.azureResourceId, state.provisioningState, JSON.stringify(state.verificationRecords), JSON.stringify(state.verificationStates), state.linked, state.providerErrorStatus, state.providerErrorCode, state.providerRequestId, state.providerErrorAt],
     );
     return result.rows[0] ? mapRow(result.rows[0]) : null;
   }
@@ -82,8 +111,7 @@ export class D1DomainRepository implements DomainRepository {
 
   async list(tenantId: string): Promise<TenantEmailDomain[]> {
     const result = await this.database.prepare(
-      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-              verification_records_json, verification_states_json, linked, updated_at
+      `SELECT ${DOMAIN_FIELDS}
          FROM tenant_email_domains WHERE tenant_id = ?1 ORDER BY created_at DESC`,
     ).bind(tenantId).all<DomainRow>();
     return (result.results ?? []).map(mapRow);
@@ -91,8 +119,7 @@ export class D1DomainRepository implements DomainRepository {
 
   async get(tenantId: string, id: string): Promise<TenantEmailDomain | null> {
     const result = await this.database.prepare(
-      `SELECT id, tenant_id, domain_name, provider, azure_resource_id, provisioning_state,
-              verification_records_json, verification_states_json, linked, updated_at
+      `SELECT ${DOMAIN_FIELDS}
          FROM tenant_email_domains WHERE tenant_id = ?1 AND id = ?2 LIMIT 1`,
     ).bind(tenantId, id).first<DomainRow>();
     return result ? mapRow(result) : null;
@@ -120,9 +147,13 @@ export class D1DomainRepository implements DomainRepository {
               verification_records_json = ?5,
               verification_states_json = ?6,
               linked = ?7,
+              provider_error_status = ?8,
+              provider_error_code = ?9,
+              provider_request_id = ?10,
+              provider_error_at = ?11,
               updated_at = CURRENT_TIMESTAMP
         WHERE tenant_id = ?1 AND id = ?2`,
-    ).bind(tenantId, id, state.azureResourceId, state.provisioningState, JSON.stringify(state.verificationRecords), JSON.stringify(state.verificationStates), state.linked ? 1 : 0).run();
+    ).bind(tenantId, id, state.azureResourceId, state.provisioningState, JSON.stringify(state.verificationRecords), JSON.stringify(state.verificationStates), state.linked ? 1 : 0, state.providerErrorStatus, state.providerErrorCode, state.providerRequestId, state.providerErrorAt).run();
     return this.get(tenantId, id);
   }
 }
@@ -139,6 +170,10 @@ function mapRow(row: DomainRow): TenantEmailDomain {
     verificationStates: parseJson(row.verification_states_json),
     linked: row.linked === true || row.linked === 1,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+    providerErrorStatus: row.provider_error_status ?? null,
+    providerErrorCode: row.provider_error_code ?? null,
+    providerRequestId: row.provider_request_id ?? null,
+    providerErrorAt: row.provider_error_at instanceof Date ? row.provider_error_at.toISOString() : row.provider_error_at ?? null,
   };
 }
 
