@@ -1,6 +1,6 @@
 # MKETY Campaigns: implementation status, roadmap, and pilot gates
 
-**Audit date:** 2026-11-15. **Status:** PRs #96, #98, and #99 are merged to `main`. The latest production deployment finished at 2026-11-15 21:26:29 UTC; Coolify reports `running:healthy`, and public `/healthz` and database-backed `/readyz` return HTTP 200. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
+**Audit date:** 2026-11-16. **Status:** PRs #96, #98, #99, and #101 are merged to `main`. The latest independently verified production deployment finished at 2026-11-15 21:26:29 UTC, before PR #101; the branding and public-indexing release still needs live deployment verification. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
 
 This page describes code on main separately from live operational evidence. Passing CI or merging code proves neither successful deployment nor safe live delivery. The 2026-10-29 design and 2026-10-30 implementation plan remain historical intent.
 
@@ -17,7 +17,8 @@ This page describes code on main separately from live operational evidence. Pass
 | Delivery events | Canonical ACS/OCI event contract, idempotent reconciliation and permanent bounce/complaint suppression. **No provider-authenticated public ingestion route or provider subscription verification exists.** Do not connect public requests directly to the reconciler. |
 | Storage and recovery | R2, Azure Blob and OCI object-storage adapters exist. No automated PostgreSQL backup and tested restore pipeline is established. |
 | SMS | Provider interface and Telnyx adapter exist; live SMS remains disabled and compliance/STOP handling is incomplete. |
-| Deployment | The production app is deployed in the existing Mkety Core production environment on the shared `mkety-postgres` service, using schema `campaigns`. Coolify reports `running:healthy`, and the public `/readyz` route and HTTPS certificate are verified. Campaign sends, test sends, SMS, and OCI backup remain disabled. |
+| Public frontend and indexing | PR #101 adds the Mkety-branded overview and enterprise page, product-accurate copy, social/SEO metadata, favicon and Apple icon references, `robots.txt`, `sitemap.xml`, and `llms.txt`. App/API/auth/invite/unsubscribe paths are disallowed for crawlers and return `X-Robots-Tag: noindex`. The merged code has not yet been confirmed live. |
+| Deployment | The last independently verified production deployment ran in the existing Mkety Core production environment on the shared `mkety-postgres` service, using schema `campaigns`. Coolify reports `running:healthy`, and the public `/readyz` route and HTTPS certificate are verified. Campaign sends, test sends, SMS, and OCI backup remain disabled. |
 
 ## Ops console inventory and next controls
 
@@ -38,6 +39,8 @@ Next Ops product work after PR #99: add searchable campaign/invitation history a
 ## Production evidence checked
 
 The latest post-deploy verification ran after PR #99. Coolify reports `running:healthy`; `/healthz` returned HTTP 200 (`ok`) and `/readyz` returned HTTP 200 (`ready`). The latest deployment record finished at 2026-11-15 21:26:29 UTC. The provisioning workflow explicitly kept email campaign sends, test sends, SMS, and OCI backup disabled. Runtime readiness confirms live PostgreSQL connectivity. Coolify still reports `git_commit_sha=HEAD`, so the exact running image SHA is not independently exposed; GitHub Actions confirms the deployment workflow ran from merge commit `c6d7a1bddf0c87ec3d007287b171fef03528185d`.
+
+PR #101 merged on 2026-11-16 after that verification. Its GitHub CI passed typecheck, build, migrations, auth checks, and all existing tests. The campaign host could not be reached through the available external verifier in this session, so do not treat the new public pages, SEO routes, or `X-Robots-Tag` behavior as live until checked through Coolify or a direct deployment smoke test.
 
 The health-check failure was caused by the runtime image lacking both `curl` and `wget`, which Coolify requires inside the app container to run dashboard-configured HTTP checks. The runtime Docker image now installs `curl`; the strict database-backed `/readyz` check is restored. The temporary `/healthz` platform check and certificate-bypassing diagnostic probe have been removed. Historical failed deployment records may still show the earlier health-check failure; the latest app state is healthy.
 
