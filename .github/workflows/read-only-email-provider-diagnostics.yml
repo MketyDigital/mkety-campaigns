@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 jobs:
   inspect:
@@ -32,6 +33,7 @@ jobs:
       OCI_EMAIL_COMPARTMENT_OCID: ${{ secrets.OCI_EMAIL_COMPARTMENT_OCID }}
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Check provider credentials and email.mkety.com state without sending email
         shell: bash
@@ -44,7 +46,8 @@ jobs:
           const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
           const json = async response => { try { return await response.json(); } catch { return {}; } };
           const codeFrom = value => safeCode(value?.code) || safeCode(value?.error?.code) || safeCode(value?.error);
-          const report = (name, result) => console.log(name + ':', JSON.stringify(result));
+          const diagnosticResults = [];
+          const report = (name, result) => { console.log(name + ':', JSON.stringify(result)); diagnosticResults.push({ name, result: result.result, provider_code: result.provider_code }); };
           const required = names => names.filter(name => !process.env[name]?.trim());
           const headerId = (response, ...names) => names.map(name => safeRequestId(response.headers.get(name))).find(Boolean);
 
@@ -262,4 +265,19 @@ jobs:
           }
 
           await Promise.all([checkAcs(), checkAzure(), checkOci(), readRecentProvisioningDiagnostics()]);
+          const failures = diagnosticResults.filter(item => ['missing_configuration','malformed_connection_string','malformed_connection_string','provider_rejected','token_rejected','request_unavailable'].includes(item.result));
+          const details = diagnosticResults.filter(item => item.name.includes('credential check') || item.name.includes('domain management check')).map(item => item.name.split(' ')[0] + '=' + (item.result || 'unavailable'));
+          const description = ('Read-only provider diagnostics complete: ' + details.join(', ')).slice(0, 140);
+          const statusResponse = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/statuses/${process.env.GITHUB_SHA}`, {
+            method: 'POST',
+            headers: { authorization: 'Bearer ' + process.env.GITHUB_TOKEN, accept: 'application/vnd.github+json', 'content-type': 'application/json', 'x-github-api-version': '2022-11-28' },
+            body: JSON.stringify({
+              state: failures.length ? 'failure' : 'success',
+              context: 'email-provider-diagnostics',
+              description,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            }),
+            signal: AbortSignal.timeout(12000),
+          });
+          console.log('Sanitized diagnostic status publication:', statusResponse.ok ? 'published' : 'unavailable HTTP ' + statusResponse.status);
           NODE
