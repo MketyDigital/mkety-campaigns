@@ -221,6 +221,9 @@ test("sign-in and required authenticator setup pages are available", async () =>
   const mfa = await (await createApp().request("/app/setup-mfa")).text();
   assert.match(mfa, /authenticator app/i);
   assert.match(mfa, /backup codes/i);
+  const setupScript = mfa.match(/<script>([\\s\\S]*?)<\\/script>/);
+  assert.ok(setupScript, "MFA setup page should contain its submit handler");
+  assert.doesNotThrow(() => new Script(setupScript[1]), "MFA setup script must parse before the password form can submit");
 });
 
 test("workspace dashboard authorizes the active tenant seat and links core tools", async () => {
