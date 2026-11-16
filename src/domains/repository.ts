@@ -53,13 +53,13 @@ export class PostgresDomainRepository implements DomainRepository {
     return result.rows[0] ? mapRow(result.rows[0]) : null;
   }
 
-  async switchProviderIfFailed(id: string, from: TenantEmailDomain["provider"], to: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null> {
+  async switchProviderAfterConfirmedAbsent(id: string, from: TenantEmailDomain["provider"], to: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null> {
     try {
       const result = await this.database.query<DomainRow>(
         `UPDATE tenant_email_domains SET provider=$3,provisioning_state='Pending',azure_resource_id=NULL,
            verification_records_json='{}',verification_states_json='{}',provider_error_status=NULL,
            provider_error_code=NULL,provider_request_id=NULL,provider_error_at=NULL,updated_at=NOW()
-         WHERE id=$1 AND provider=$2 AND provisioning_state='Failed' RETURNING ${DOMAIN_FIELDS}`,
+         WHERE id=$1 AND provider=$2 AND provisioning_state IN ('Failed','Unknown') RETURNING ${DOMAIN_FIELDS}`,
         [id, from, to],
       );
       return result.rows[0] ? mapRow(result.rows[0]) : null;

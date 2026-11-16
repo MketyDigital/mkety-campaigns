@@ -22,8 +22,8 @@ function repository(): DomainRepository & { rows: TenantEmailDomain[] } {
     async list(tenantId) { return rows.filter((row) => row.tenantId === tenantId); },
     async get(tenantId, id) { return rows.find((row) => row.tenantId === tenantId && row.id === id) ?? null; },
     async getById(id) { return rows.find((row) => row.id === id) ?? null; },
-    async switchProviderIfFailed(id, from, to) {
-      const row = rows.find((item) => item.id === id && item.provider === from && item.provisioningState === "Failed");
+    async switchProviderAfterConfirmedAbsent(id, from, to) {
+      const row = rows.find((item) => item.id === id && item.provider === from && (item.provisioningState === "Failed" || item.provisioningState === "Unknown"));
       if (!row) return null;
       Object.assign(row, { provider: to, provisioningState: "Pending", azureResourceId: null, verificationRecords: {}, verificationStates: {}, linked: false });
       return row;
@@ -118,7 +118,7 @@ test("Ops cannot switch a failed domain when its original provider cannot confir
   const target = provider();
   const service = createTenantDomainService(store, { "acs-email": source, "oci-email-delivery": target });
   await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
-  await assert.rejects(service.retryFailedOnProvider!(store.rows[0]!.id, "oci-email-delivery"), DomainFallbackNotSafeError);
+  await assert.rejects(service.retryAfterConfirmedAbsent!(store.rows[0]!.id, "oci-email-delivery"), DomainFallbackNotSafeError);
   assert.equal(store.rows[0]?.provider, "acs-email");
   assert.deepEqual(target.calls, []);
 });
@@ -129,11 +129,63 @@ test("Ops switches a failed domain only after the original provider confirms 404
   const target = provider();
   const service = createTenantDomainService(store, { "acs-email": source, "oci-email-delivery": target });
   await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
-  const result = await service.retryFailedOnProvider!(store.rows[0]!.id, "oci-email-delivery");
+  const result = await service.retryAfterConfirmedAbsent!(store.rows[0]!.id, "oci-email-delivery");
   assert.equal(result?.provider, "oci-email-delivery");
   assert.equal(result?.provisioningState, "Running");
   assert.equal(store.rows[0]?.provider, "oci-email-delivery");
   assert.deepEqual(target.calls, ["create:mail.example.com"]);
+});
+
+test("Ops can reconcile an old uncertain domain to the fallback only after a provider-specific not-found", async () => {
+  const store = repository();
+  const source = provider({
+    async createDomain(name) { source.calls.push(`create:${name}`); throw new Error("request outcome unknown"); },
+    async getDomain(name) { source.calls.push(`get:${name}`); throw new EmailDomainProviderError("oci-email-delivery", 404, "NotFound"); },
+  });
+  const target = provider();
+  const service = createTenantDomainService(store, { "oci-email-delivery": source, "acs-email": target }, "oci-email-delivery");
+  await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
+  const row = store.rows[0]!;
+  row.providerErrorAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+
+  const result = await service.retryAfterConfirmedAbsent!(row.id, "acs-email");
+
+  assert.equal(result?.provider, "acs-email");
+  assert.deepEqual(source.calls, ["create:mail.example.com", "get:mail.example.com"]);
+  assert.deepEqual(target.calls, ["create:mail.example.com"]);
+});
+
+test("Ops does not switch an uncertain domain during the provider propagation window", async () => {
+  const store = repository();
+  const source = provider({
+    async createDomain(name) { source.calls.push(`create:${name}`); throw new Error("request outcome unknown"); },
+    async getDomain(name) { source.calls.push(`get:${name}`); throw new EmailDomainProviderError("oci-email-delivery", 404, "NotFound"); },
+  });
+  const target = provider();
+  const service = createTenantDomainService(store, { "oci-email-delivery": source, "acs-email": target }, "oci-email-delivery");
+  await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
+
+  await assert.rejects(service.retryAfterConfirmedAbsent!(store.rows[0]!.id, "acs-email"), /safely reconciled uncertain/);
+
+  assert.deepEqual(source.calls, ["create:mail.example.com", "get:mail.example.com"]);
+  assert.deepEqual(target.calls, []);
+  assert.equal(store.rows[0]?.provider, "oci-email-delivery");
+});
+
+test("Ops does not treat OCI NotAuthorizedOrNotFound as confirmed domain absence", async () => {
+  const store = repository();
+  const source = provider({
+    async createDomain() { throw new EmailDomainProviderError("oci-email-delivery", 403, "AuthorizationFailed"); },
+    async getDomain() { throw new EmailDomainProviderError("oci-email-delivery", 404, "NotAuthorizedOrNotFound"); },
+  });
+  const target = provider();
+  const service = createTenantDomainService(store, { "oci-email-delivery": source, "acs-email": target }, "oci-email-delivery");
+  await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
+
+  await assert.rejects(service.retryAfterConfirmedAbsent!(store.rows[0]!.id, "acs-email"), DomainFallbackNotSafeError);
+
+  assert.deepEqual(target.calls, []);
+  assert.equal(store.rows[0]?.provider, "oci-email-delivery");
 });
 
 test("does not expose or return a domain belonging to another tenant", async () => {
@@ -196,7 +248,7 @@ test("allows a tenant to retry a domain after transient Azure creation failure",
   assert.equal(failed.provisioningState, "Unknown");
   fail = false;
 
-  await assert.rejects(service.retryCreate("tenant-1", failed.id), /Only a failed domain provisioning operation/i);
+  await assert.rejects(service.retryCreate("tenant-1", failed.id), /failed or safely reconciled uncertain domain setup/i);
   assert.deepEqual(arm.calls, ["create:example.com"]);
 });
 

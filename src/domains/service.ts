@@ -26,7 +26,7 @@ export interface DomainRepository {
   insertPending(domain: NewTenantEmailDomain): Promise<TenantEmailDomain>;
   saveState(tenantId: string, id: string, state: TenantDomainState): Promise<TenantEmailDomain | null>;
   getById?(id: string): Promise<TenantEmailDomain | null>;
-  switchProviderIfFailed?(id: string, from: TenantEmailDomain["provider"], to: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null>;
+  switchProviderAfterConfirmedAbsent?(id: string, from: TenantEmailDomain["provider"], to: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null>;
 }
 
 export interface TenantDomainService {
@@ -34,7 +34,7 @@ export interface TenantDomainService {
   get(tenantId: string, id: string): Promise<TenantEmailDomain | null>;
   create(tenantId: string, domainName: string): Promise<TenantEmailDomain>;
   retryCreate(tenantId: string, id: string): Promise<TenantEmailDomain | null>;
-  retryFailedOnProvider?(id: string, provider: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null>;
+  retryAfterConfirmedAbsent?(id: string, provider: TenantEmailDomain["provider"]): Promise<TenantEmailDomain | null>;
   refresh(tenantId: string, id: string): Promise<TenantEmailDomain | null>;
   verify(tenantId: string, id: string, type: VerificationType): Promise<TenantEmailDomain | null>;
 }
@@ -55,7 +55,7 @@ export class DomainProvisioningError extends Error {
 
 export class DomainRetryNotAvailableError extends Error {
   constructor() {
-    super("Only a failed domain provisioning operation can be retried");
+    super("Only a failed or safely reconciled uncertain domain setup can be retried");
     this.name = "DomainRetryNotAvailableError";
   }
 }
@@ -95,6 +95,13 @@ function errorState(error: unknown): Pick<TenantDomainState, "providerErrorStatu
   const requestId = rawRequestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(rawRequestId) ? rawRequestId : null;
   const definitelyRejected = status !== null && status >= 400 && status < 500 && status !== 408 && status !== 409;
   return { provisioningState: definitelyRejected ? "Failed" : "Unknown", providerErrorStatus: status, providerErrorCode: code, providerRequestId: requestId, providerErrorAt: new Date().toISOString() };
+}
+
+const UNCERTAIN_DOMAIN_PROPAGATION_GRACE_MS = 10 * 60 * 1000;
+
+function isConfirmedDomainAbsence(error: unknown, provider: TenantEmailDomain["provider"]): error is EmailDomainProviderError {
+  return error instanceof EmailDomainProviderError && error.provider === provider && error.status === 404 &&
+    (error.providerCode === "NotFound" || error.providerCode === "ResourceNotFound");
 }
 
 export function createTenantDomainService(
@@ -218,25 +225,31 @@ export function createTenantDomainService(
       return this.refresh(tenantId, id);
     },
 
-    async retryFailedOnProvider(id, targetProviderName) {
+    async retryAfterConfirmedAbsent(id, targetProviderName) {
       const saved = await repository.getById?.(id);
       if (!saved) return null;
-      if (saved.provisioningState !== "Failed" || saved.provider === targetProviderName) throw new DomainRetryNotAvailableError();
+      if ((saved.provisioningState !== "Failed" && saved.provisioningState !== "Unknown") || saved.provider === targetProviderName) throw new DomainRetryNotAvailableError();
       const sourceProvider = providerFor(saved.provider);
       const targetProvider = providerFor(targetProviderName);
-      if (!sourceProvider || !targetProvider || !repository.switchProviderIfFailed) throw new DomainProvisioningError();
+      if (!sourceProvider || !targetProvider || !repository.switchProviderAfterConfirmedAbsent) throw new DomainProvisioningError();
       try {
         const existing = await sourceProvider.getDomain(saved.domainName);
         const refreshed = await repository.saveState(saved.tenantId, saved.id, fromProviderState(existing));
         if (!refreshed) throw new DomainProvisioningError();
         return refreshed;
       } catch (error) {
-        if (!(error instanceof EmailDomainProviderError && error.provider === saved.provider && error.status === 404)) {
+        if (!isConfirmedDomainAbsence(error, saved.provider)) {
           logProvisioningFailure("retry", id, error);
           throw new DomainFallbackNotSafeError();
         }
+        if (saved.provisioningState === "Unknown") {
+          const failedAt = Date.parse(saved.providerErrorAt ?? "");
+          if (!Number.isFinite(failedAt) || Date.now() - failedAt < UNCERTAIN_DOMAIN_PROPAGATION_GRACE_MS) {
+            throw new DomainRetryNotAvailableError();
+          }
+        }
       }
-      const switched = await repository.switchProviderIfFailed(id, saved.provider, targetProviderName);
+      const switched = await repository.switchProviderAfterConfirmedAbsent(id, saved.provider, targetProviderName);
       if (!switched) throw new DomainRetryNotAvailableError();
       try {
         const state = await targetProvider.createDomain(saved.domainName);

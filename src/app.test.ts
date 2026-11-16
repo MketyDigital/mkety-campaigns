@@ -428,7 +428,7 @@ test("Ops provider routing exposes configured adapters and validates policy muta
 test("Ops domain diagnostics omit DNS records and fallback action uses only the configured alternate", async () => {
   let requestedProvider: string | undefined;
   const domains = fakeDomainService({
-    async retryFailedOnProvider(id, provider) {
+    async retryAfterConfirmedAbsent(id, provider) {
       assert.equal(id, "domain-failure-1");
       requestedProvider = provider;
       return { ...sampleDomain, id, provider, provisioningState: "Running", verificationRecords: { Domain: { type: "TXT", name: "@", value: "dns-secret" } } };
@@ -436,7 +436,7 @@ test("Ops domain diagnostics omit DNS records and fallback action uses only the 
   });
   const operations = {
     async listDomainFailures() {
-      return [{ id: "domain-failure-1", tenantId: "tenant-1", workspaceName: "MKETY", domainName: "email.mkety.com", provider: "acs-email", provisioningState: "Failed", providerErrorStatus: 403, providerErrorCode: "AuthorizationFailed", providerRequestId: "trace-123", providerErrorAt: null }];
+      return [{ id: "domain-failure-1", tenantId: "tenant-1", workspaceName: "MKETY", domainName: "email.mkety.com", provider: "acs-email", provisioningState: "Unknown", providerErrorStatus: null, providerErrorCode: "provider_error", providerRequestId: null, providerErrorAt: new Date(Date.now() - 11 * 60 * 1000).toISOString() }];
     },
     async recordDomainProviderRetry() {},
   } as unknown as OperationsService;
@@ -453,8 +453,10 @@ test("Ops domain diagnostics omit DNS records and fallback action uses only the 
   const listing = await app.request("/api/ops/email-domains/failures");
   assert.equal(listing.status, 200);
   const body = await listing.text();
-  assert.match(body, /AuthorizationFailed/);
+  assert.match(body, /provider_error/);
   assert.doesNotMatch(body, /dns-secret|verificationRecords|verification_records_json/);
+  const opsPage = await app.request("/app/ops");
+  assert.match(await opsPage.text(), /Reconcile and continue on configured fallback/);
   const retry = await app.request("/api/ops/email-domains/domain-failure-1/retry-with-fallback", {
     method: "POST", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" }, body: "{}",
   });
