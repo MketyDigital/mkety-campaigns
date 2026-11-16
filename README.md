@@ -1,10 +1,10 @@
 # MKETY Campaigns — Standalone Architecture & Roadmap
 
-Status: PRs #96, #98, #99, and #101 are merged. The latest independently verified production deployment is from 2026-11-15; the branding and public-indexing changes in #101 merged on 2026-11-16 and still need live deployment verification. Campaign and test sends, SMS, and OCI backup remain disabled. Owner: MKETY Ops. Updated: 2026-11-16.
+Status: PRs #96, #98, #99, and #101 are merged. The owner reports the MKETY-branded public site is now visible. The production code's exact deployed SHA, health/readiness, and delivery readiness remain unverified. Campaign and test sends, SMS, and OCI backup remain disabled. Owner: MKETY Ops. Updated: 2026-11-16.
 
 **Current implementation and production gates:** [Development status and pilot readiness](docs/operations/development-status.md).
 
-The public Campaigns site now follows Mkety branding and includes public product and enterprise pages, canonical/social metadata, `robots.txt`, `sitemap.xml`, and `llms.txt`. Private app and API paths are excluded from indexing.
+The owner reports the updated public Campaigns site is now visible. It includes Mkety branding, public product and enterprise pages, canonical/social metadata, `robots.txt`, `sitemap.xml`, and `llms.txt`. Private app and API paths are excluded from indexing; verify these routes and the deployed commit in production.
 
 ## Current build
 - One TypeScript/Hono application with shared routes and separate Node and Cloudflare Workers entry points.
