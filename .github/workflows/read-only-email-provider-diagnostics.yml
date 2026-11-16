@@ -243,8 +243,9 @@ jobs:
                 if (!r.ok) throw new Error('CoolifyRequestError');
                 return r.json();
               };
-              const apps = await get('/applications');
-              const app = (Array.isArray(apps) ? apps : []).find(item => item.name === 'mkety-campaigns');
+              const appsPayload = await get('/applications');
+              const apps = Array.isArray(appsPayload) ? appsPayload : Array.isArray(appsPayload.applications) ? appsPayload.applications : [];
+              const app = apps.find(item => item.name === 'mkety-campaigns');
               if (!app?.uuid) return report('Recent domain provisioning diagnostics', { result: 'application_not_found' });
               const payload = await get('/applications/' + encodeURIComponent(app.uuid) + '/logs?lines=150');
               const logs = typeof payload.logs === 'string' ? payload.logs : '';
