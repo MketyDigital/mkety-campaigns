@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
-          import { createHmac, createPrivateKey, createSign, randomUUID, createHash } from 'node:crypto';
+          import { createHmac, createPrivateKey, createPublicKey, createSign, randomUUID, createHash } from 'node:crypto';
 
           const safeCode = value => typeof value === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined;
           const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
@@ -147,12 +147,21 @@ jobs:
               });
               const communicationBody = await json(communicationResponse);
               const linkedDomains = communicationBody?.properties?.linkedDomains;
+              let acsEndpointMatchesService = null;
+              try {
+                const endpointPart = (process.env.ACS_EMAIL_CONNECTION_STRING || '').split(';').find(part => part.trim().toLowerCase().startsWith('endpoint='));
+                const connectionHost = endpointPart ? new URL(endpointPart.slice(endpointPart.indexOf('=') + 1).trim()).host.toLowerCase() : '';
+                const resourceHost = typeof communicationBody?.properties?.hostName === 'string' ? communicationBody.properties.hostName.toLowerCase() : '';
+                acsEndpointMatchesService = Boolean(connectionHost && resourceHost && connectionHost === resourceHost);
+              } catch {}
               report('Azure Communication Service check', {
                 result: communicationResponse.ok ? 'authenticated' : communicationResponse.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
                 http_status: communicationResponse.status,
                 provider_code: codeFrom(communicationBody),
                 request_id: headerId(communicationResponse, 'x-ms-request-id', 'x-ms-correlation-request-id'),
                 email_domain_linked: Array.isArray(linkedDomains) && domainId ? linkedDomains.includes(domainId) : null,
+                email_endpoint_matches_resource: acsEndpointMatchesService,
+                public_network_access: safeCode(communicationBody?.properties?.publicNetworkAccess) || null,
               });
             } catch (error) {
               report('Azure ARM credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
@@ -194,6 +203,13 @@ jobs:
             const missing = required(keys);
             if (missing.length) return report('OCI Email Delivery credential check', { result: 'missing_configuration', missing_keys: missing });
             try {
+              const privateKeyObject = createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY.replace(/\\n/g, '\n'));
+              const publicKeyDer = createPublicKey(privateKeyObject).export({ type: 'spki', format: 'der' });
+              const derivedFingerprint = createHash('md5').update(publicKeyDer).digest('hex').match(/.{2}/g)?.join(':') || '';
+              report('OCI API key fingerprint check', {
+                result: derivedFingerprint.toLowerCase() === process.env.OCI_EMAIL_FINGERPRINT.trim().toLowerCase()
+                  ? 'matches_configured_fingerprint' : 'does_not_match_configured_fingerprint',
+              });
               const submitEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT);
               const submitRegion = submitEndpoint.hostname.match(/\.submit\.email\.([a-z0-9-]+)\.oci\.oraclecloud\.com$/i)?.[1] || null;
               const configuredRegion = process.env.OCI_EMAIL_REGION.trim();
@@ -230,6 +246,7 @@ jobs:
                 http_status: response.status,
                 provider_code: codeFrom(body),
                 request_id: headerId(response, 'opc-request-id'),
+                server_clock_skew_seconds: response.headers.get('date') ? Math.round((Date.now() - Date.parse(response.headers.get('date'))) / 1000) : null,
                 domain_state: safeCode(domain?.lifecycleState) || null,
                 spf_verified: domain?.isSpf === true,
                 active_dkim_present: Boolean(domain?.activeDkimId),
