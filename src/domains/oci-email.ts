@@ -76,16 +76,12 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
 
   async function domainByName(domainName: string): Promise<Record<string, unknown>> {
     const domain = await findDomainByName(domainName);
-    if (!domain) throw new Error("OCI email domain was not found");
+    if (!domain) throw new EmailDomainProviderError("oci-email-delivery", 404, "NotFound");
     return domain;
   }
 
-  async function getDomainState(domainName: string): Promise<AzureDomainState> {
-    const domain = await domainByName(domainName);
+  function toDomainState(domainName: string, domain: Record<string, unknown>, dkims: Record<string, unknown>[]): AzureDomainState {
     const id = required(stringField(domain, "id"), "OCI email domain id");
-    const dkimQuery = new URLSearchParams({ compartmentId: compartment, emailDomainId: id, limit: "100" });
-    const dkimPayload = await request("GET", `/${API_VERSION}/dkims?${dkimQuery}`);
-    const dkims = arrayField(dkimPayload, "items");
     const dkim = dkims.find((item) => stringField(item, "id") === stringField(domain, "activeDkimId")) ?? dkims[0];
     const dkimHost = stringField(dkim, "dnsSubdomainName");
     const dkimValue = stringField(dkim, "cnameRecordValue");
@@ -93,17 +89,25 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
     const spfActive = domain.isSpf === true;
     const verificationRecords: AzureDomainState["verificationRecords"] = {
       SPF: { type: "TXT", name: normalizeDomain(domainName), value: SPF_VALUE },
-      DKIM: { type: "CNAME", name: dkimHost ?? `oci-dkim-not-ready.${normalizeDomain(domainName)}`, value: dkimValue ?? "" },
+      ...(dkimHost && dkimValue ? { DKIM: { type: "CNAME", name: dkimHost, value: dkimValue } } : {}),
     };
     const verificationStates: AzureDomainState["verificationStates"] = {
       SPF: { status: spfActive ? "Verified" : "NotStarted" },
-      ...(dkim ? { DKIM: { status: dkimActive ? "Verified" : "NotStarted" } } : {}),
+      ...(dkimHost && dkimValue ? { DKIM: { status: dkimActive ? "Verified" : "NotStarted" } } : {}),
     };
     return {
       id, name: normalizeDomain(domainName),
       provisioningState: stringField(domain, "lifecycleState") === "ACTIVE" ? "Succeeded" : "Accepted",
       verificationRecords, verificationStates, linked: spfActive && dkimActive,
     };
+  }
+
+  async function getDomainState(domainName: string): Promise<AzureDomainState> {
+    const domain = await domainByName(domainName);
+    const id = required(stringField(domain, "id"), "OCI email domain id");
+    const dkimQuery = new URLSearchParams({ compartmentId: compartment, emailDomainId: id, limit: "100" });
+    const dkimPayload = await request("GET", `/${API_VERSION}/dkims?${dkimQuery}`);
+    return toDomainState(domainName, domain, arrayField(dkimPayload, "items"));
   }
 
   async function findSender(domainName: string, username: string): Promise<AzureSenderUsernameState | undefined> {
@@ -119,15 +123,31 @@ export function createOciEmailDomains(config: OciEmailDomainsConfig): AzureCommu
     async createDomain(domainName) {
       const normalized = normalizeDomain(domainName);
       let domain = await findDomainByName(normalized);
+      let newlyCreated = false;
       if (!domain) {
         const created = await request("POST", `/${API_VERSION}/emailDomains`, { name: normalized, compartmentId: compartment });
         domain = objectField(created, "emailDomain") ?? created;
+        newlyCreated = true;
       }
       const id = required(stringField(domain, "id"), "OCI email domain id");
       const query = new URLSearchParams({ compartmentId: compartment, emailDomainId: id, limit: "100" });
-      const existingDkim = arrayField(await request("GET", `/${API_VERSION}/dkims?${query}`), "items");
-      if (existingDkim.length === 0) await request("POST", `/${API_VERSION}/dkims`, { emailDomainId: id });
-      return getDomainState(normalized);
+      let dkims = arrayField(await request("GET", `/${API_VERSION}/dkims?${query}`), "items");
+      if (dkims.length === 0) {
+        const createdDkim = await request("POST", `/${API_VERSION}/dkims`, { emailDomainId: id });
+        const dkim = objectField(createdDkim, "dkim");
+        if (dkim) dkims = [dkim];
+      }
+      try {
+        return await getDomainState(normalized);
+      } catch (error) {
+        // OCI accepts domain and DKIM create requests asynchronously. A short-lived
+        // list inconsistency after an accepted create must not turn that outcome
+        // into a failed setup that an operator might provision a second time.
+        if (newlyCreated && error instanceof EmailDomainProviderError && error.status === 404) {
+          return toDomainState(normalized, domain, dkims);
+        }
+        throw error;
+      }
     },
     getDomain: getDomainState,
     async initiateVerification() { /* OCI updates verification as DNS records become visible. */ },

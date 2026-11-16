@@ -69,3 +69,42 @@ test("OCI email sender provisioning fails closed while SPF or DKIM is not verifi
   });
   await assert.rejects(provider.createSenderUsername("mail.example.com", "info", "Example"), /must be verified/);
 });
+
+test("OCI returns accepted setup details when a newly created domain is not yet visible to list reads", async () => {
+  const pair = await crypto.subtle.generateKey(
+    { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"],
+  );
+  const body = Buffer.from(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).toString("base64").match(/.{1,64}/g)?.join("\n") ?? "";
+  let domainCreates = 0;
+  let dkimCreates = 0;
+  let domainReads = 0;
+  const provider = createOciEmailDomains({
+    region: "eu-frankfurt-1", tenancyOcid: "tenancy", userOcid: "user", fingerprint: "01:02",
+    privateKey: `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`, compartmentOcid: "compartment",
+    fetcher: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/emailDomains") && init?.method === "POST") {
+        domainCreates++;
+        return Response.json({ emailDomain: { id: "domain-1", name: "mail.example.com", lifecycleState: "CREATING" } }, { status: 201 });
+      }
+      if (url.pathname.endsWith("/dkims") && init?.method === "POST") {
+        dkimCreates++;
+        return Response.json({ dkim: { id: "dkim-1", lifecycleState: "CREATING" } }, { status: 201 });
+      }
+      if (url.pathname.endsWith("/emailDomains")) {
+        domainReads++;
+        return Response.json({ items: [] });
+      }
+      if (url.pathname.endsWith("/dkims")) return Response.json({ items: [] });
+      return new Response("unexpected OCI request", { status: 404 });
+    },
+  });
+  const state = await provider.createDomain("mail.example.com");
+  assert.equal(state.provisioningState, "Accepted");
+  assert.equal(state.linked, false);
+  assert.equal(state.verificationRecords.SPF?.value, "v=spf1 include:rp.oracleemaildelivery.com ~all");
+  assert.equal(state.verificationRecords.DKIM, undefined);
+  assert.equal(domainCreates, 1);
+  assert.equal(dkimCreates, 1);
+  assert.equal(domainReads, 2);
+});

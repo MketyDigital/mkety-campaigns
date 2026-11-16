@@ -251,7 +251,8 @@ test("MFA setup password form uses a POST-only fail-closed fallback", async () =
 
 test("domain setup distinguishes provider provisioning failure from pending DNS setup", async () => {
   const html = await (await createApp().request("/app/domains")).text();
-  assert.match(html, /domain\.provisioningState === 'Failed' \? 'Provisioning failed' : domain\.linked \? 'Linked and verified' : 'DNS setup required'/);
+  assert.match(html, /domain\.provisioningState === 'Unknown' \? 'Outcome uncertain · reconcile status'/);
+  assert.match(html, /Do not add this domain again or retry provisioning while the outcome is uncertain/);
   assert.match(html, /Email setup failed before DNS records were available/);
 });
 

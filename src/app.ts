@@ -264,11 +264,11 @@ form.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData
           const title = document.createElement('h2'); title.textContent = domain.domainName;
           const state = document.createElement('p'); state.className = 'status'; state.textContent = 'Email setup: ' + label(domain.provisioningState);
           details.append(title, state);
-          const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = domain.provisioningState === 'Failed' ? 'Provisioning failed' : domain.linked ? 'Linked and verified' : 'DNS setup required';
+          const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = domain.provisioningState === 'Unknown' ? 'Outcome uncertain · reconcile status' : domain.provisioningState === 'Failed' ? 'Provisioning failed' : domain.linked ? 'Linked and verified' : 'DNS setup required';
           head.append(details, badge); card.append(head);
           const entries = Object.entries(domain.verificationRecords || {});
           if (!entries.length) {
-            const note = document.createElement('p'); note.className = 'muted'; note.textContent = domain.provisioningState === 'Failed' ? 'Email setup failed before DNS records were available. Check the setup and retry provisioning.' : 'Email setup is preparing the DNS records. Refresh in a moment.'; card.append(note);
+            const note = document.createElement('p'); note.className = 'muted'; note.textContent = domain.provisioningState === 'Unknown' ? 'The provider outcome is uncertain and DNS records are not confirmed. Refresh to reconcile status. Do not add this domain again or retry provisioning while the outcome is uncertain.' : domain.provisioningState === 'Failed' ? 'Email setup failed before DNS records were available. Check the setup and retry provisioning.' : 'Email setup is preparing the DNS records. Refresh in a moment.'; card.append(note);
           } else {
             const table = document.createElement('table'); table.className = 'records';
             const thead = document.createElement('thead'); const header = document.createElement('tr');

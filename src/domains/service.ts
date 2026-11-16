@@ -191,6 +191,11 @@ export function createTenantDomainService(
           state = { ...state, linked: true };
         }
       } catch (error) {
+        // A 404 from a follow-up read is not proof that a previously accepted
+        // provisioning request failed. Keep Unknown/Accepted records intact so
+        // the owner can reconcile later without being prompted to create again.
+        if ((saved.provisioningState === "Unknown" || saved.provisioningState === "Accepted") &&
+            error instanceof EmailDomainProviderError && error.status === 404) return saved;
         await repository.saveState(tenantId, id, {
           ...saved,
           ...errorState(error),
