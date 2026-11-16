@@ -194,7 +194,15 @@ jobs:
             const missing = required(keys);
             if (missing.length) return report('OCI Email Delivery credential check', { result: 'missing_configuration', missing_keys: missing });
             try {
-              const host = `https://email.${process.env.OCI_EMAIL_REGION}.oci.oraclecloud.com`;
+              const submitEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT);
+              const submitRegion = submitEndpoint.hostname.match(/\.submit\.email\.([a-z0-9-]+)\.oci\.oraclecloud\.com$/i)?.[1] || null;
+              const configuredRegion = process.env.OCI_EMAIL_REGION.trim();
+              report('OCI email endpoint configuration', {
+                result: submitEndpoint.protocol === 'https:' && submitRegion ? 'valid_endpoint_shape' : 'unrecognized_endpoint_shape',
+                data_plane_region_matches_control_plane: submitRegion ? submitRegion.toLowerCase() === configuredRegion.toLowerCase() : null,
+                control_plane_host: `email.${configuredRegion}.oci.oraclecloud.com`,
+              });
+              const host = `https://email.${configuredRegion}.oci.oraclecloud.com`;
               const url = new URL('/20170907/emailDomains?' + new URLSearchParams({ compartmentId: process.env.OCI_EMAIL_COMPARTMENT_OCID, name: 'email.mkety.com', limit: '100' }), host);
               const auth = ociRequestTarget('GET', url);
               const response = await fetch(url, { headers: auth.headers, signal: AbortSignal.timeout(12000) });
@@ -233,6 +241,7 @@ jobs:
                 error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : error instanceof Error && /key|pem/i.test(error.message) ? 'PrivateKeyImportError' : 'NetworkOrSigningError',
                 error_name: safeCode(error?.name) || 'Error',
                 error_code: safeCode(error?.code) || safeCode(error?.cause?.code) || null,
+                control_plane_host: `email.${process.env.OCI_EMAIL_REGION}.oci.oraclecloud.com`,
               });
             }
           }
