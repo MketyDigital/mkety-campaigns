@@ -105,8 +105,12 @@ jobs:
           }
           const get = (key) => {
             const values = entries.get(key) ?? [];
-            if (values.length > 1) throw new Error(`Duplicate Coolify environment entries: ${key}`);
-            return values[0];
+            const production = values.filter((entry) => entry.is_preview !== true);
+            const runtime = production.filter((entry) => entry.is_runtime === true);
+            const candidates = runtime.length ? runtime : production;
+            if (candidates.length > 1) throw new Error(`Ambiguous production Coolify environment entries: ${key}`);
+            if (!candidates.length && values.length) throw new Error(`No production Coolify environment entry: ${key}`);
+            return candidates[0];
           };
           const configured = (key) => {
             const entry = get(key);
