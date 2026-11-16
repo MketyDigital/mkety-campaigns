@@ -53,6 +53,22 @@ export class DomainRetryNotAvailableError extends Error {
   }
 }
 
+function logProvisioningFailure(operation: "create" | "retry", domainId: string, error: unknown): void {
+  const errorName = error instanceof Error && /^[A-Za-z][A-Za-z0-9]*$/.test(error.name)
+    ? error.name
+    : "ProviderError";
+  const providerStatus = typeof error === "object" && error !== null && "status" in error &&
+    typeof error.status === "number" && Number.isInteger(error.status)
+    ? error.status
+    : undefined;
+  console.warn("Email domain provisioning failed", JSON.stringify({
+    operation,
+    domainId,
+    errorName,
+    ...(providerStatus === undefined ? {} : { providerStatus }),
+  }));
+}
+
 export function createTenantDomainService(
   repository: DomainRepository,
   provider: AzureCommunicationDomains,
@@ -78,7 +94,8 @@ export function createTenantDomainService(
         const updated = await repository.saveState(tenantId, id, fromProviderState(state));
         if (!updated) throw new Error("Domain disappeared during provisioning");
         return updated;
-      } catch {
+      } catch (error) {
+        logProvisioningFailure("create", id, error);
         await repository.saveState(tenantId, id, {
           azureResourceId: saved.azureResourceId,
           provisioningState: "Failed",
@@ -101,7 +118,8 @@ export function createTenantDomainService(
         const updated = await repository.saveState(tenantId, id, fromProviderState(state));
         if (!updated) throw new Error("Domain disappeared during provisioning retry");
         return updated;
-      } catch {
+      } catch (error) {
+        logProvisioningFailure("retry", id, error);
         await repository.saveState(tenantId, id, {
           azureResourceId: saved.azureResourceId,
           provisioningState: "Failed",

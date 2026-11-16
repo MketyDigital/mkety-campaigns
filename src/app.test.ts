@@ -227,6 +227,27 @@ test("sign-in and required authenticator setup pages are available", async () =>
   assert.doesNotThrow(() => new Script(mfa.slice(setupScriptStart + 8, setupScriptEnd)), "MFA setup script must parse before the password form can submit");
 });
 
+test("MFA setup password form uses a POST-only fail-closed fallback", async () => {
+  const app = createApp();
+  const page = await (await app.request("/app/setup-mfa")).text();
+  assert.match(page, /<form id="enable-form" method="post" action="\/app\/setup-mfa">/);
+
+  const fallback = await app.request("/app/setup-mfa", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "password=must-not-be-processed",
+  });
+  assert.equal(fallback.status, 405);
+  assert.equal(await fallback.text(), "Enable JavaScript to continue MFA setup.");
+  assert.equal(fallback.headers.get("referrer-policy"), "no-referrer");
+});
+
+test("domain setup distinguishes provider provisioning failure from pending DNS setup", async () => {
+  const html = await (await createApp().request("/app/domains")).text();
+  assert.match(html, /domain\.provisioningState === 'Failed' \? 'Provisioning failed' : domain\.linked \? 'Linked and verified' : 'DNS setup required'/);
+  assert.match(html, /Email setup failed before DNS records were available/);
+});
+
 test("workspace dashboard authorizes the active tenant seat and links core tools", async () => {
   const response = await createApp(async () => true, activeSession).request("/app");
   assert.equal(response.status, 200);
@@ -557,11 +578,12 @@ test("security headers prevent browser caching of authenticated and authenticati
     assert.equal(response.headers.get("cache-control"), "no-store", path);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);
-    assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin", path);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer", path);
   }
   const publicResponse = await app.request("/healthz");
   assert.equal(publicResponse.headers.get("cache-control"), null);
   assert.equal(publicResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(publicResponse.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
 });
 
 
