@@ -65,7 +65,7 @@ Provisioning keeps email test sends, campaign sends, SMS, and OCI backup disable
 - [ ] Add monitoring, operator alerts, and provider quota/burst limits validated against account limits; the app's per-provider interval and daily queue budget do not enforce vendor quotas.
 - [ ] Configure encrypted PostgreSQL backups, retention and monitoring; restore one into an isolated database and record recovery evidence.
 - [ ] Verify owned sender domains, SPF/DKIM/DMARC, approved sender identity, and delivery/opt-out behavior without relaxing sends gates.
-- [ ] Keep `EMAIL_CAMPAIGN_SEND_ENABLED=false` and `EMAIL_TEST_SEND_ENABLED=false` until all gates pass. A one-recipient pilot still requires a separate, explicit operator decision after verification.
+- [ ] Keep `EMAIL_CAMPAIGN_SEND_ENABLED=false` until all live-campaign gates pass. The fixed account-owner test-send gate is separate and may be enabled temporarily in the existing workspace only after the provider credentials and domain-management access are configured, the owner is signed in with MFA, and a sender is ready; disable `EMAIL_TEST_SEND_ENABLED` after the owner confirms the inbox check. SMS and OCI backup remain disabled. A one-recipient campaign pilot still requires separate verification and approval.
 
 ## P1 customer and operating features
 
