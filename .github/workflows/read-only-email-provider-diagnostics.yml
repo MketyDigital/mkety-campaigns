@@ -69,7 +69,7 @@ jobs:
             const url = new URL(`/emails/operations/${operationId}?api-version=2023-03-31`, endpoint.origin);
             const date = new Date().toUTCString();
             const contentHash = createHash('sha256').update('').digest('base64');
-            const stringToSign = `GET\n${url.pathname}${url.search}\\n${date};${url.host};${contentHash}`;
+            const stringToSign = `GET\n${url.pathname}${url.search}\n${date};${url.host};${contentHash}`;
             const signature = createHmac('sha256', key).update(stringToSign).digest('base64');
             try {
               const response = await fetch(url, { headers: {
@@ -128,11 +128,28 @@ jobs:
                 signal: AbortSignal.timeout(12000),
               });
               const body = await json(response);
+              const domainId = typeof body.id === 'string' ? body.id : undefined;
               report('Azure email domain management check', {
                 result: response.ok ? 'authenticated' : response.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
                 http_status: response.status,
                 provider_code: codeFrom(body),
                 request_id: headerId(response, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+                provisioning_state: safeCode(body?.properties?.provisioningState) || null,
+                domain_verified: body?.properties?.verificationStates ? Object.values(body.properties.verificationStates).every(value => value?.status === 'Verified') : null,
+              });
+              const communicationPath = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/communicationServices/${encodeURIComponent(process.env.AZURE_COMMUNICATION_SERVICE_NAME)}?api-version=2025-05-01`;
+              const communicationResponse = await fetch(new URL(communicationPath, 'https://management.azure.com'), {
+                headers: { authorization: `Bearer ${payload.access_token}` },
+                signal: AbortSignal.timeout(12000),
+              });
+              const communicationBody = await json(communicationResponse);
+              const linkedDomains = communicationBody?.properties?.linkedDomains;
+              report('Azure Communication Service check', {
+                result: communicationResponse.ok ? 'authenticated' : communicationResponse.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
+                http_status: communicationResponse.status,
+                provider_code: codeFrom(communicationBody),
+                request_id: headerId(communicationResponse, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+                email_domain_linked: Array.isArray(linkedDomains) && domainId ? linkedDomains.includes(domainId) : null,
               });
             } catch (error) {
               report('Azure ARM credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
