@@ -147,12 +147,21 @@ jobs:
               });
               const communicationBody = await json(communicationResponse);
               const linkedDomains = communicationBody?.properties?.linkedDomains;
+              let acsEndpointMatchesService = null;
+              try {
+                const endpointPart = (process.env.ACS_EMAIL_CONNECTION_STRING || '').split(';').find(part => part.trim().toLowerCase().startsWith('endpoint='));
+                const connectionHost = endpointPart ? new URL(endpointPart.slice(endpointPart.indexOf('=') + 1).trim()).host.toLowerCase() : '';
+                const resourceHost = typeof communicationBody?.properties?.hostName === 'string' ? communicationBody.properties.hostName.toLowerCase() : '';
+                acsEndpointMatchesService = Boolean(connectionHost && resourceHost && connectionHost === resourceHost);
+              } catch {}
               report('Azure Communication Service check', {
                 result: communicationResponse.ok ? 'authenticated' : communicationResponse.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
                 http_status: communicationResponse.status,
                 provider_code: codeFrom(communicationBody),
                 request_id: headerId(communicationResponse, 'x-ms-request-id', 'x-ms-correlation-request-id'),
                 email_domain_linked: Array.isArray(linkedDomains) && domainId ? linkedDomains.includes(domainId) : null,
+                email_endpoint_matches_resource: acsEndpointMatchesService,
+                public_network_access: safeCode(communicationBody?.properties?.publicNetworkAccess) || null,
               });
             } catch (error) {
               report('Azure ARM credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
