@@ -1,0 +1,265 @@
+name: Read-only email provider diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/read-only-email-provider-diagnostics.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACS_EMAIL_CONNECTION_STRING: ${{ secrets.ACS_EMAIL_CONNECTION_STRING }}
+      AZURE_ARM_TENANT_ID: ${{ secrets.AZURE_ARM_TENANT_ID }}
+      AZURE_ARM_CLIENT_ID: ${{ secrets.AZURE_ARM_CLIENT_ID }}
+      AZURE_ARM_CLIENT_SECRET: ${{ secrets.AZURE_ARM_CLIENT_SECRET }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      AZURE_EMAIL_SERVICE_NAME: ${{ secrets.AZURE_EMAIL_SERVICE_NAME }}
+      AZURE_COMMUNICATION_SERVICE_NAME: ${{ secrets.AZURE_COMMUNICATION_SERVICE_NAME }}
+      OCI_EMAIL_ENDPOINT: ${{ secrets.OCI_EMAIL_ENDPOINT }}
+      OCI_EMAIL_REGION: ${{ secrets.OCI_EMAIL_REGION }}
+      OCI_EMAIL_TENANCY_OCID: ${{ secrets.OCI_EMAIL_TENANCY_OCID }}
+      OCI_EMAIL_USER_OCID: ${{ secrets.OCI_EMAIL_USER_OCID }}
+      OCI_EMAIL_FINGERPRINT: ${{ secrets.OCI_EMAIL_FINGERPRINT }}
+      OCI_EMAIL_PRIVATE_KEY: ${{ secrets.OCI_EMAIL_PRIVATE_KEY }}
+      OCI_EMAIL_COMPARTMENT_OCID: ${{ secrets.OCI_EMAIL_COMPARTMENT_OCID }}
+      COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
+      COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
+    steps:
+      - name: Check provider credentials and email.mkety.com state without sending email
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { createHmac, createPrivateKey, createSign, randomUUID, createHash } from 'node:crypto';
+
+          const safeCode = value => typeof value === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined;
+          const safeRequestId = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
+          const json = async response => { try { return await response.json(); } catch { return {}; } };
+          const codeFrom = value => safeCode(value?.code) || safeCode(value?.error?.code) || safeCode(value?.error);
+          const report = (name, result) => console.log(name + ':', JSON.stringify(result));
+          const required = names => names.filter(name => !process.env[name]?.trim());
+          const headerId = (response, ...names) => names.map(name => safeRequestId(response.headers.get(name))).find(Boolean);
+
+          async function checkAcs() {
+            const value = process.env.ACS_EMAIL_CONNECTION_STRING || '';
+            const fields = new Map(value.split(';').map(part => {
+              const at = part.indexOf('=');
+              return at > 0 ? [part.slice(0, at).trim().toLowerCase(), part.slice(at + 1).trim()] : ['', ''];
+            }).filter(([key]) => key));
+            const endpointValue = fields.get('endpoint');
+            const encodedKey = fields.get('accesskey');
+            if (!endpointValue || !encodedKey) return report('ACS email credential check', { result: 'missing_or_malformed_connection_string' });
+            let endpoint;
+            let key;
+            try {
+              endpoint = new URL(endpointValue);
+              key = Buffer.from(encodedKey, 'base64');
+              if (endpoint.protocol !== 'https:' || !key.length) throw new Error();
+            } catch { return report('ACS email credential check', { result: 'malformed_connection_string' }); }
+
+            const operationId = randomUUID();
+            const url = new URL(`/emails/operations/${operationId}?api-version=2023-03-31`, endpoint.origin);
+            const date = new Date().toUTCString();
+            const contentHash = createHash('sha256').update('').digest('base64');
+            const stringToSign = `GET\n${url.pathname}${url.search}\n${date};${url.host};${contentHash}`;
+            const signature = createHmac('sha256', key).update(stringToSign).digest('base64');
+            try {
+              const response = await fetch(url, { headers: {
+                'x-ms-date': date,
+                'x-ms-content-sha256': contentHash,
+                authorization: `HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature=${signature}`,
+              }, signal: AbortSignal.timeout(12000) });
+              const payload = await json(response);
+              const valid = response.ok || response.status === 404;
+              report('ACS email credential check', {
+                result: valid ? (response.status === 404 ? 'authenticated_probe_resource_absent' : 'authenticated') : 'provider_rejected',
+                http_status: response.status,
+                provider_code: safeCode(response.headers.get('x-ms-error-code')) || codeFrom(payload),
+                request_id: headerId(response, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+              });
+            } catch (error) {
+              report('ACS email credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
+            }
+          }
+
+          async function azureRequestToken() {
+            const url = `https://login.microsoftonline.com/${encodeURIComponent(process.env.AZURE_ARM_TENANT_ID)}/oauth2/v2.0/token`;
+            const form = new URLSearchParams({
+              client_id: process.env.AZURE_ARM_CLIENT_ID,
+              client_secret: process.env.AZURE_ARM_CLIENT_SECRET,
+              grant_type: 'client_credentials',
+              scope: 'https://management.azure.com/.default',
+            });
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'content-type': 'application/x-www-form-urlencoded' },
+              body: form,
+              signal: AbortSignal.timeout(12000),
+            });
+            const payload = await json(response);
+            return { response, payload };
+          }
+
+          async function checkAzure() {
+            const keys = ['AZURE_ARM_TENANT_ID','AZURE_ARM_CLIENT_ID','AZURE_ARM_CLIENT_SECRET','AZURE_SUBSCRIPTION_ID','AZURE_RESOURCE_GROUP','AZURE_EMAIL_SERVICE_NAME','AZURE_COMMUNICATION_SERVICE_NAME'];
+            const missing = required(keys);
+            if (missing.length) return report('Azure ARM credential check', { result: 'missing_configuration', missing_keys: missing });
+            try {
+              const { response: tokenResponse, payload } = await azureRequestToken();
+              if (!tokenResponse.ok || typeof payload.access_token !== 'string') {
+                return report('Azure ARM credential check', {
+                  result: 'token_rejected',
+                  http_status: tokenResponse.status,
+                  provider_code: safeCode(payload.error),
+                  request_id: headerId(tokenResponse, 'x-ms-request-id', 'request-id'),
+                });
+              }
+              const path = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/emailServices/${encodeURIComponent(process.env.AZURE_EMAIL_SERVICE_NAME)}/domains/email.mkety.com?api-version=2025-05-01`;
+              const response = await fetch(new URL(path, 'https://management.azure.com'), {
+                headers: { authorization: `Bearer ${payload.access_token}` },
+                signal: AbortSignal.timeout(12000),
+              });
+              const body = await json(response);
+              const domainId = typeof body.id === 'string' ? body.id : undefined;
+              report('Azure email domain management check', {
+                result: response.ok ? 'authenticated' : response.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
+                http_status: response.status,
+                provider_code: codeFrom(body),
+                request_id: headerId(response, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+                provisioning_state: safeCode(body?.properties?.provisioningState) || null,
+                domain_verified: body?.properties?.verificationStates ? (Object.keys(body.properties.verificationStates).length > 0 && Object.values(body.properties.verificationStates).every(value => value?.status === 'Verified')) : null,
+              });
+              const communicationPath = `/subscriptions/${encodeURIComponent(process.env.AZURE_SUBSCRIPTION_ID)}/resourceGroups/${encodeURIComponent(process.env.AZURE_RESOURCE_GROUP)}/providers/Microsoft.Communication/communicationServices/${encodeURIComponent(process.env.AZURE_COMMUNICATION_SERVICE_NAME)}?api-version=2025-05-01`;
+              const communicationResponse = await fetch(new URL(communicationPath, 'https://management.azure.com'), {
+                headers: { authorization: `Bearer ${payload.access_token}` },
+                signal: AbortSignal.timeout(12000),
+              });
+              const communicationBody = await json(communicationResponse);
+              const linkedDomains = communicationBody?.properties?.linkedDomains;
+              report('Azure Communication Service check', {
+                result: communicationResponse.ok ? 'authenticated' : communicationResponse.status === 404 ? 'authenticated_resource_absent' : 'provider_rejected',
+                http_status: communicationResponse.status,
+                provider_code: codeFrom(communicationBody),
+                request_id: headerId(communicationResponse, 'x-ms-request-id', 'x-ms-correlation-request-id'),
+                email_domain_linked: Array.isArray(linkedDomains) && domainId ? linkedDomains.includes(domainId) : null,
+              });
+            } catch (error) {
+              report('Azure ARM credential check', { result: 'request_unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'NetworkError' });
+            }
+          }
+
+          function ociRequestTarget(method, url, body = '') {
+            const date = new Date().toUTCString();
+            const payload = body ? [
+              `content-length: ${Buffer.byteLength(body)}`,
+              'content-type: application/json',
+              `x-content-sha256: ${createHash('sha256').update(body).digest('base64')}`,
+            ] : [];
+            const signingString = [
+              `(request-target): ${method.toLowerCase()} ${url.pathname}${url.search}`,
+              `date: ${date}`,
+              `host: ${url.host}`,
+              ...payload,
+            ].join('\n');
+            const key = createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY.replace(/\\n/g, '\n'));
+            const signer = createSign('RSA-SHA256');
+            signer.update(signingString);
+            signer.end();
+            const signature = signer.sign(key).toString('base64');
+            const signedHeaders = ['(request-target)','date','host',...payload.map(header => header.split(':')[0])];
+            return {
+              date,
+              headers: {
+                date,
+                ...(body ? { 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)), 'x-content-sha256': createHash('sha256').update(body).digest('base64') } : {}),
+                authorization: `Signature version="1",keyId="${process.env.OCI_EMAIL_TENANCY_OCID}/${process.env.OCI_EMAIL_USER_OCID}/${process.env.OCI_EMAIL_FINGERPRINT}",algorithm="rsa-sha256",headers="${signedHeaders.join(' ')}",signature="${signature}"`,
+                'opc-request-id': `mkety-diagnostic-${randomUUID()}`,
+              },
+            };
+          }
+
+          async function checkOci() {
+            const keys = ['OCI_EMAIL_REGION','OCI_EMAIL_TENANCY_OCID','OCI_EMAIL_USER_OCID','OCI_EMAIL_FINGERPRINT','OCI_EMAIL_PRIVATE_KEY','OCI_EMAIL_COMPARTMENT_OCID','OCI_EMAIL_ENDPOINT'];
+            const missing = required(keys);
+            if (missing.length) return report('OCI Email Delivery credential check', { result: 'missing_configuration', missing_keys: missing });
+            try {
+              const host = `https://email.${process.env.OCI_EMAIL_REGION}.oci.oraclecloud.com`;
+              const url = new URL('/20170907/emailDomains?' + new URLSearchParams({ compartmentId: process.env.OCI_EMAIL_COMPARTMENT_OCID, name: 'email.mkety.com', limit: '100' }), host);
+              const auth = ociRequestTarget('GET', url);
+              const response = await fetch(url, { headers: auth.headers, signal: AbortSignal.timeout(12000) });
+              const body = await json(response);
+              const domain = Array.isArray(body.items) ? body.items.find(item => String(item.name || '').toLowerCase() === 'email.mkety.com') : undefined;
+              let dkim = [];
+              if (response.ok && domain?.id) {
+                const dkimUrl = new URL('/20170907/dkims?' + new URLSearchParams({ compartmentId: process.env.OCI_EMAIL_COMPARTMENT_OCID, emailDomainId: domain.id, limit: '100' }), host);
+                const dkimAuth = ociRequestTarget('GET', dkimUrl);
+                const dkimResponse = await fetch(dkimUrl, { headers: dkimAuth.headers, signal: AbortSignal.timeout(12000) });
+                const dkimBody = await json(dkimResponse);
+                if (dkimResponse.ok && Array.isArray(dkimBody.items)) dkim = dkimBody.items;
+                report('OCI DKIM record check', {
+                  result: dkimResponse.ok ? 'readable' : 'provider_rejected',
+                  http_status: dkimResponse.status,
+                  provider_code: codeFrom(dkimBody),
+                  request_id: headerId(dkimResponse, 'opc-request-id'),
+                  record_count: dkim.length,
+                  states: dkim.map(item => safeCode(item.lifecycleState) || 'unknown'),
+                  published_record_values_present: dkim.map(item => Boolean(item.dnsSubdomainName && item.cnameRecordValue)),
+                });
+              }
+              report('OCI Email Delivery credential and domain check', {
+                result: response.ok ? (domain ? 'authenticated_domain_found' : 'authenticated_domain_absent') : 'provider_rejected',
+                http_status: response.status,
+                provider_code: codeFrom(body),
+                request_id: headerId(response, 'opc-request-id'),
+                domain_state: safeCode(domain?.lifecycleState) || null,
+                spf_verified: domain?.isSpf === true,
+                active_dkim_present: Boolean(domain?.activeDkimId),
+                email_sender_address_count: Array.isArray(domain?.approvedSenders) ? domain.approvedSenders.length : null,
+              });
+            } catch (error) {
+              report('OCI Email Delivery credential check', {
+                result: 'request_unavailable',
+                error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : error instanceof Error && /key|pem/i.test(error.message) ? 'PrivateKeyImportError' : 'NetworkOrSigningError',
+              });
+            }
+          }
+
+          async function readRecentProvisioningDiagnostics() {
+            try {
+              const raw = process.env.COOLIFY_URL || '';
+              const origin = new URL(raw.includes('://') ? raw : 'https://' + raw.replace(/^\/\//, ''));
+              if (origin.protocol !== 'https:' || !process.env.COOLIFY_API_TOKEN) return report('Recent domain provisioning diagnostics', { result: 'unavailable' });
+              const api = origin.origin + '/api/v1';
+              const get = async path => {
+                const r = await fetch(api + path, { headers: { authorization: `Bearer ${process.env.COOLIFY_API_TOKEN}`, accept: 'application/json' }, signal: AbortSignal.timeout(12000) });
+                if (!r.ok) throw new Error('CoolifyRequestError');
+                return r.json();
+              };
+              const appsPayload = await get('/applications');
+              const apps = Array.isArray(appsPayload) ? appsPayload : Array.isArray(appsPayload.applications) ? appsPayload.applications : [];
+              const app = apps.find(item => item.name === 'mkety-campaigns');
+              if (!app?.uuid) return report('Recent domain provisioning diagnostics', { result: 'application_not_found' });
+              const payload = await get('/applications/' + encodeURIComponent(app.uuid) + '/logs?lines=150');
+              const logs = typeof payload.logs === 'string' ? payload.logs : '';
+              const records = [...logs.matchAll(/Email domain provisioning failed\s+(\{[^}\r\n]{1,1000}\})/g)].flatMap(match => {
+                try {
+                  const row = JSON.parse(match[1]);
+                  return [{ operation: row.operation, error_name: row.errorName, provider_status: Number.isInteger(row.providerStatus) ? row.providerStatus : null, provider_code: safeCode(row.providerCode) || null, request_id: safeRequestId(row.requestId) || null }];
+                } catch { return []; }
+              }).slice(-5);
+              report('Recent domain provisioning diagnostics', { result: records.length ? 'records_found' : 'no_recent_records', records });
+            } catch (error) {
+              report('Recent domain provisioning diagnostics', { result: 'unavailable', error_type: error?.name === 'TimeoutError' ? 'TimeoutError' : 'CoolifyRequestError' });
+            }
+          }
+
+          await Promise.all([checkAcs(), checkAzure(), checkOci(), readRecentProvisioningDiagnostics()]);
+          NODE
