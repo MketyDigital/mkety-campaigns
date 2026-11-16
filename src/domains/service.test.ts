@@ -199,3 +199,20 @@ test("allows a tenant to retry a domain after transient Azure creation failure",
   await assert.rejects(service.retryCreate("tenant-1", failed.id), /Only a failed domain provisioning operation/i);
   assert.deepEqual(arm.calls, ["create:example.com"]);
 });
+
+test("refresh preserves an uncertain OCI outcome when a follow-up list read temporarily returns 404", async () => {
+  const store = repository();
+  let createCalls = 0;
+  const oci = provider({
+    async createDomain() { createCalls++; throw new EmailDomainProviderError("oci-email-delivery", 503, "ServiceUnavailable", "request-1"); },
+    async getDomain() { throw new EmailDomainProviderError("oci-email-delivery", 404, "NotFound"); },
+  });
+  const service = createTenantDomainService(store, { "oci-email-delivery": oci }, "oci-email-delivery");
+  await assert.rejects(service.create("tenant-1", "mail.example.com"), DomainProvisioningError);
+  const before = store.rows[0]!;
+  assert.equal(before.provisioningState, "Unknown");
+  const refreshed = await service.refresh("tenant-1", before.id);
+  assert.equal(refreshed?.provisioningState, "Unknown");
+  assert.equal(refreshed?.providerRequestId, "request-1");
+  assert.equal(createCalls, 1);
+});
