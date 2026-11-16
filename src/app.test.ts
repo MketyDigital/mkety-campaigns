@@ -242,6 +242,12 @@ test("MFA setup password form uses a POST-only fail-closed fallback", async () =
   assert.equal(fallback.headers.get("referrer-policy"), "no-referrer");
 });
 
+test("domain setup distinguishes provider provisioning failure from pending DNS setup", async () => {
+  const html = await (await createApp().request("/app/domains")).text();
+  assert.match(html, /domain\.provisioningState === 'Failed' \? 'Provisioning failed' : domain\.linked \? 'Linked and verified' : 'DNS setup required'/);
+  assert.match(html, /Email setup failed before DNS records were available/);
+});
+
 test("workspace dashboard authorizes the active tenant seat and links core tools", async () => {
   const response = await createApp(async () => true, activeSession).request("/app");
   assert.equal(response.status, 200);
