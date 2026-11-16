@@ -195,7 +195,7 @@ jobs:
             if (missing.length) return report('OCI Email Delivery credential check', { result: 'missing_configuration', missing_keys: missing });
             try {
               const submitEndpoint = new URL(process.env.OCI_EMAIL_ENDPOINT);
-              const submitRegion = submitEndpoint.hostname.match(/\\.submit\\.email\\.([a-z0-9-]+)\\.oci\\.oraclecloud\\.com$/i)?.[1] || null;
+              const submitRegion = submitEndpoint.hostname.match(/\.submit\.email\.([a-z0-9-]+)\.oci\.oraclecloud\.com$/i)?.[1] || null;
               const configuredRegion = process.env.OCI_EMAIL_REGION.trim();
               report('OCI email endpoint configuration', {
                 result: submitEndpoint.protocol === 'https:' && submitRegion ? 'valid_endpoint_shape' : 'unrecognized_endpoint_shape',
