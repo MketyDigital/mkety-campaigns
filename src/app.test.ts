@@ -578,11 +578,12 @@ test("security headers prevent browser caching of authenticated and authenticati
     assert.equal(response.headers.get("cache-control"), "no-store", path);
     assert.equal(response.headers.get("x-content-type-options"), "nosniff", path);
     assert.equal(response.headers.get("x-frame-options"), "DENY", path);
-    assert.equal(response.headers.get("referrer-policy"), "strict-origin-when-cross-origin", path);
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer", path);
   }
   const publicResponse = await app.request("/healthz");
   assert.equal(publicResponse.headers.get("cache-control"), null);
   assert.equal(publicResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(publicResponse.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
 });
 
 
