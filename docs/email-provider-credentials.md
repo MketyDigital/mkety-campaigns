@@ -68,17 +68,19 @@ Sender addresses are selected per tenant from its verified domain configuration;
 
 The existing backup variables `AZURE_STORAGE_CONNECTION_STRING` and `OCI_OBJECT_STORAGE_*` are separate credentials for Azure Blob and OCI Object Storage. They are not interchangeable with these email provider credentials.
 
-## One controlled test message
+## One controlled owner-account test message
 
-1. In Coolify, set `EMAIL_PROVIDER=acs-email` or `EMAIL_PROVIDER=oci-email-delivery`, add that provider's credentials, and set `EMAIL_TEST_SEND_ENABLED=true` for the test environment only.
-2. Apply the current PostgreSQL migrations and deploy the app.
-3. Sign in as a tenant owner with MFA, add a customer-managed email domain in **Sender domains**, publish the DNS records shown by the selected provider, then refresh verification.
-4. Open **Sender addresses**, create a username such as `info`, and refresh its status until it reads `ready`.
-5. Select **Send test email to your signed-in account**. The app sends a fixed message from that sender to the account email already on the session. It ignores any caller-supplied recipient or From address.
+This test path can run in the existing Campaigns workspace. It is separate from campaign dispatch: keep `EMAIL_CAMPAIGN_SEND_ENABLED=false`, `SMS_ENABLED=false`, and `OCI_BACKUP_ENABLED=false`.
+
+1. In Coolify, select `EMAIL_PROVIDER=acs-email` or `EMAIL_PROVIDER=oci-email-delivery`, configure that provider's email and domain-management credentials, and set `EMAIL_TEST_SEND_ENABLED=true`.
+2. In Ops, create the MKETY workspace and invite an owner email account you control. Complete the invite, sign in with MFA, and finish account setup.
+3. Add a domain or subdomain you control in **Sender domains**, publish the DNS records shown in the workspace, and refresh verification until the domain is ready.
+4. In **Sender addresses**, create an address under that ready domain and refresh until its status reads `ready`.
+5. Select **Send test email to your signed-in account**. The app sends a fixed message from that ready sender to the signed-in account email. It ignores caller-supplied recipients and From addresses.
 6. Check the inbox and provider status. An HTTP success means the provider accepted the message; it does not guarantee mailbox delivery.
-7. Set `EMAIL_TEST_SEND_ENABLED=false` after the check. This test path never enqueues campaigns.
+7. Set `EMAIL_TEST_SEND_ENABLED=false` after confirming the test. This path never queues a campaign.
 
-The test action is unavailable while the sender is pending, the provider is unconfigured, or the runtime flag is false. SMS and OCI Object Storage backup remain disabled independently.
+The test action is unavailable while the sender is pending, the provider is unconfigured, the session is not authorized, or the runtime flag is false. It does not enable campaign dispatch.
 
 ## One-recipient campaign check
 

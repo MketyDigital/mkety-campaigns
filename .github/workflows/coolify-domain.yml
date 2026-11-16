@@ -24,6 +24,7 @@ jobs:
       APP_REPOSITORY: MketyDigital/mkety-campaigns
       APP_BRANCH: main
       CAMPAIGNS_DOMAIN: https://campaign.mkety.com
+      ENABLE_OWNER_TEST_SEND: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[owner-test-send]') }}
     steps:
       - name: Configure app domain and redeploy
         shell: bash
@@ -90,6 +91,96 @@ jobs:
 
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" \
             "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-envs.json"
+
+          if [ "$ENABLE_OWNER_TEST_SEND" = "true" ]; then
+            node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" <<'NODE'
+          import fs from 'node:fs';
+          const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const entries = new Map();
+          for (const entry of envs) {
+            if (!entry || typeof entry.key !== 'string') continue;
+            const existing = entries.get(entry.key) ?? [];
+            existing.push(entry);
+            entries.set(entry.key, existing);
+          }
+          const get = (key) => {
+            const values = entries.get(key) ?? [];
+            if (values.length > 1) throw new Error(`Duplicate Coolify environment entries: ${key}`);
+            return values[0];
+          };
+          const configured = (key) => {
+            const entry = get(key);
+            return Boolean(entry && (
+              (typeof entry.value === 'string' && entry.value.trim().length > 0) ||
+              entry.is_shown_once === true ||
+              entry.is_secret === true
+            ));
+          };
+          const provider = get('EMAIL_PROVIDER')?.value?.trim() || 'acs-email';
+          const providerKeys = provider === 'acs-email'
+            ? ['ACS_EMAIL_CONNECTION_STRING']
+            : provider === 'oci-email-delivery'
+              ? ['OCI_EMAIL_ENDPOINT', 'OCI_EMAIL_REGION', 'OCI_EMAIL_TENANCY_OCID', 'OCI_EMAIL_USER_OCID', 'OCI_EMAIL_FINGERPRINT', 'OCI_EMAIL_PRIVATE_KEY', 'OCI_EMAIL_COMPARTMENT_OCID']
+              : null;
+          if (!providerKeys) throw new Error('EMAIL_PROVIDER must be acs-email or oci-email-delivery');
+          const domainKeys = provider === 'acs-email'
+            ? ['AZURE_ARM_TENANT_ID', 'AZURE_ARM_CLIENT_ID', 'AZURE_ARM_CLIENT_SECRET', 'AZURE_SUBSCRIPTION_ID', 'AZURE_RESOURCE_GROUP', 'AZURE_EMAIL_SERVICE_NAME', 'AZURE_COMMUNICATION_SERVICE_NAME']
+            : ['OCI_EMAIL_REGION', 'OCI_EMAIL_TENANCY_OCID', 'OCI_EMAIL_USER_OCID', 'OCI_EMAIL_FINGERPRINT', 'OCI_EMAIL_PRIVATE_KEY', 'OCI_EMAIL_COMPARTMENT_OCID'];
+          const required = ['DATABASE_URL', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_URL', ...providerKeys, ...domainKeys];
+          const missing = [...new Set(required)].filter((key) => !configured(key));
+          if (missing.length) throw new Error(`Test-send preflight is blocked: missing configured runtime entries (${missing.join(', ')}). No send flags were changed.`);
+          const authUrl = get('BETTER_AUTH_URL')?.value?.trim().replace(/\/$/, '');
+          if (authUrl !== 'https://campaign.mkety.com') throw new Error('BETTER_AUTH_URL must be https://campaign.mkety.com before enabling the test sender.');
+          process.stdout.write(`Test-send preflight passed for ${provider}; credential values were not read into logs.\n`);
+          NODE
+
+            upsert_runtime_env() {
+              local key="$1"
+              local value="$2"
+              local method
+              method="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" "$key" <<'NODE'
+          import fs from 'node:fs';
+          const entries = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')).filter((entry) => entry.key === process.argv[3]);
+          if (entries.length > 1) { console.error(`Duplicate Coolify environment entries: ${process.argv[3]}`); process.exit(1); }
+          process.stdout.write(entries.length ? 'PATCH' : 'POST');
+          NODE
+              )"
+              local payload
+              payload="$(node --input-type=module - "$key" "$value" <<'NODE'
+          const [key, value] = process.argv.slice(2);
+          process.stdout.write(JSON.stringify({ key, value, is_literal: true, is_runtime: true, is_buildtime: false, is_preview: false }));
+          NODE
+              )"
+              curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+                --request "$method" "${headers[@]}" --header 'Content-Type: application/json' \
+                --data-binary "$payload" "$api/applications/$app_uuid/envs" > /dev/null
+            }
+
+            upsert_runtime_env EMAIL_CAMPAIGN_SEND_ENABLED false
+            upsert_runtime_env SMS_ENABLED false
+            upsert_runtime_env OCI_BACKUP_ENABLED false
+            upsert_runtime_env EMAIL_TEST_SEND_ENABLED true
+
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error "${headers[@]}" \
+              "$api/applications/$app_uuid/envs" > "$RUNNER_TEMP/coolify-envs-verified.json"
+            node --input-type=module - "$RUNNER_TEMP/coolify-envs-verified.json" <<'NODE'
+          import fs from 'node:fs';
+          const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expected = new Map([
+            ['EMAIL_TEST_SEND_ENABLED', 'true'],
+            ['EMAIL_CAMPAIGN_SEND_ENABLED', 'false'],
+            ['SMS_ENABLED', 'false'],
+            ['OCI_BACKUP_ENABLED', 'false'],
+          ]);
+          for (const [key, value] of expected) {
+            const entries = envs.filter((entry) => entry.key === key);
+            if (entries.length !== 1 || String(entries[0].value).trim().toLowerCase() !== value) {
+              throw new Error(`Coolify did not confirm the expected safe gate for ${key}`);
+            }
+          }
+          process.stdout.write('Verified owner-only test send on; campaign sending, SMS, and OCI backup off.\n');
+          NODE
+          fi
           env_uuid="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" <<'NODE'
           import fs from 'node:fs';
           const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -113,4 +204,15 @@ jobs:
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
             --request POST "${headers[@]}" "$api/applications/$app_uuid/start?instant_deploy=true" \
             > "$RUNNER_TEMP/coolify-deploy.json"
-          echo "Coolify domain configured and deployment requested for campaign.mkety.com."
+          healthy=false
+          for attempt in $(seq 1 30); do
+            health_code="$(curl --fail --silent --output /dev/null --write-out "%{http_code}" "$CAMPAIGNS_DOMAIN/healthz" || true)"
+            ready_code="$(curl --fail --silent --output /dev/null --write-out "%{http_code}" "$CAMPAIGNS_DOMAIN/readyz" || true)"
+            if [ "$health_code" = "200" ] && [ "$ready_code" = "200" ]; then healthy=true; break; fi
+            sleep 10
+          done
+          if [ "$healthy" != "true" ]; then
+            echo "Deployment was requested, but /healthz and /readyz did not both return HTTP 200." >&2
+            exit 1
+          fi
+          echo "Coolify deployment is healthy; /healthz and /readyz returned HTTP 200."
