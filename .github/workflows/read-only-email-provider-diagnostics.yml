@@ -69,7 +69,7 @@ jobs:
             const url = new URL(`/emails/operations/${operationId}?api-version=2023-03-31`, endpoint.origin);
             const date = new Date().toUTCString();
             const contentHash = createHash('sha256').update('').digest('base64');
-            const stringToSign = `GET\\n${url.pathname}${url.search}\\n${date};${url.host};${contentHash}`;
+            const stringToSign = `GET\n${url.pathname}${url.search}\\n${date};${url.host};${contentHash}`;
             const signature = createHmac('sha256', key).update(stringToSign).digest('base64');
             try {
               const response = await fetch(url, { headers: {
@@ -151,7 +151,7 @@ jobs:
               `date: ${date}`,
               `host: ${url.host}`,
               ...payload,
-            ].join('\\n');
+            ].join('\n');
             const key = createPrivateKey(process.env.OCI_EMAIL_PRIVATE_KEY.replace(/\\n/g, '\n'));
             const signer = createSign('RSA-SHA256');
             signer.update(signingString);
