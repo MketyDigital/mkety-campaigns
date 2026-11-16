@@ -219,7 +219,7 @@ jobs:
           import fs from 'node:fs';
           import { Script } from 'node:vm';
           const html = fs.readFileSync(process.argv[2], 'utf8');
-          const script = html.match(/<script>([\\s\\S]*?)<\\/script>/)?.[1];
+          const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
           if (!script) process.exit(1);
           new Script(script);
           NODE
