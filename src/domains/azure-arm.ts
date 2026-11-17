@@ -58,7 +58,7 @@ export class EmailDomainProviderError extends Error {
   }
 }
 
-const DEFAULT_API_VERSION = "2025-05-01";
+const DEFAULT_API_VERSION = "2025-09-01";
 const ARM_ENDPOINT = "https://management.azure.com";
 const LINK_UPDATE_ATTEMPTS = 5;
 
