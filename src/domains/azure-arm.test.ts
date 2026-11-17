@@ -45,6 +45,7 @@ test("creates a customer-managed Azure email domain and returns provider DNS rec
   assert.equal(domain.linked, false);
   assert.equal(calls.length, 2);
   assert.match(calls[1].url, /domains\/mail.example.com\?api-version=/);
+  assert.equal(new URL(calls[1].url).searchParams.get("api-version"), "2025-09-01");
   assert.deepEqual(JSON.parse(String(calls[1].init.body)), {
     location: "Global",
     properties: { domainManagement: "CustomerManaged", userEngagementTracking: "Disabled" },
