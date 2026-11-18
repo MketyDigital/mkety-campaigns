@@ -22,6 +22,7 @@ export type EmailSendResult = {
 export interface EmailProvider {
   readonly name: EmailSendResult["provider"];
   send(message: CampaignEmail): Promise<EmailSendResult>;
+  getSendStatus?(operationId: string): Promise<{ status: string; errorCode?: string }>;
 }
 
 /** Provider response is a rejection only when the HTTP response proves it never accepted the send. */
@@ -96,9 +97,33 @@ export function createAcsEmailProvider(config: {
       }
       return {
         provider: "acs-email",
-        providerMessageId: stringField(payload, "id") ?? headerValue(response, "operation-location"),
+        providerMessageId: extractAcsOperationId(stringField(payload, "id"), headerValue(response, "operation-location"), parsed.endpoint),
         requestId: operationId,
         acceptedAt: new Date().toISOString(),
+      };
+    },
+    async getSendStatus(operationId) {
+      if (!/^[0-9a-f-]{36}$/i.test(operationId)) throw new Error("Invalid Azure email operation ID");
+      const url = new URL(`/emails/operations/${encodeURIComponent(operationId)}?api-version=2023-03-31`, parsed.endpoint);
+      const date = new Date().toUTCString();
+      const contentHash = await sha256Base64("");
+      const stringToSign = `GET\n${url.pathname}${url.search}\n${date};${url.host};${contentHash}`;
+      const key = await crypto.subtle.importKey("raw", toArrayBuffer(base64ToBytes(parsed.accessKey)), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      const signature = bytesToBase64(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(stringToSign))));
+      const response = await fetcher(url, { method: "GET", headers: {
+        "x-ms-date": date,
+        "x-ms-content-sha256": contentHash,
+        authorization: `HMAC-SHA256 SignedHeaders=x-ms-date;host;x-ms-content-sha256&Signature=${signature}`,
+      } });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        const body = objectField(payload, "error");
+        throw providerError("acs-email", response.status, payload, response.headers.get("x-ms-error-code") ?? (body ? stringField(body, "code") : undefined), response.headers.get("x-ms-request-id") ?? response.headers.get("x-ms-correlation-request-id"));
+      }
+      const error = objectField(payload, "error");
+      return {
+        status: stringField(payload, "status") ?? "Unknown",
+        ...(error && stringField(error, "code") ? { errorCode: stringField(error, "code") } : {}),
       };
     },
   };
@@ -294,6 +319,21 @@ function stringField(value: Record<string, unknown>, key: string): string | unde
 
 function headerValue(response: Response, key: string): string | undefined {
   return response.headers.get(key) ?? undefined;
+}
+
+function extractAcsOperationId(bodyId: string | undefined, operationLocation: string | undefined, endpoint: string): string | undefined {
+  const isGuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  if (bodyId && isGuid(bodyId)) return bodyId;
+  if (!operationLocation) return undefined;
+  try {
+    const location = new URL(operationLocation);
+    if (location.origin !== endpoint) return undefined;
+    const match = location.pathname.match(/\/emails\/operations\/([^/]+)\/?$/i);
+    const operationId = match?.[1];
+    return operationId && isGuid(operationId) ? operationId : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function providerError(
