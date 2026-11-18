@@ -1,5 +1,9 @@
 # MKETY Campaigns: implementation status, roadmap, and pilot gates
 
+## 2026-11-18 email activation update
+
+The owner confirmed receipt of the fixed Azure test email. PR in progress adds audited Ops switches for email campaign delivery and owner test-send, queued-job visibility, and an explicit emergency-stop control. Migration 0107 enables the email feature controls while setting the emergency stop ON so existing queued work cannot start automatically. Azure and OCI email can be selected through the existing primary/fallback routing policy; fallback remains limited to definitive non-acceptance so uncertain sends are never duplicated. SMS dispatch and OCI backup remain disabled and unavailable in Ops because their background workers are not implemented. Clear the email emergency stop only after reviewing the displayed queue count and confirming those jobs should send.
+
 **Audit date:** 2026-11-16. **Status:** PRs #96, #98, #99, and #101 are merged to `main`. The latest independently verified production deployment finished at 2026-11-15 21:26:29 UTC, before PR #101. The owner now reports the branded site is visible, but the deployed SHA and post-deployment health/readiness checks have not been independently verified. Campaign/test sending, SMS, and OCI backup remain disabled; this is not cleared for a live campaign.
 
 This page describes code on main separately from live operational evidence. Passing CI or merging code proves neither successful deployment nor safe live delivery. The 2026-10-29 design and 2026-10-30 implementation plan remain historical intent.

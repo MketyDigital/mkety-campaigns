@@ -30,7 +30,6 @@ jobs:
       COOLIFY_URL: ${{ secrets.OCI_COOLIFY_URL || secrets.COOLIFY_URL || 'https://deploy.mkety.com' }}
       COOLIFY_API_TOKEN: ${{ secrets.OCI_COOLIFY_TOKEN || secrets.COOLIFY_TOKEN }}
       DATABASE_URL: ${{ secrets.MKETY_DATABASE_URL }}
-      ENABLE_OWNER_TEST_SEND: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[owner-test-send]') }}
       BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET || secrets.AUTH_SECRET }}
       MKETY_OPS_AUTH_ISSUER: ${{ vars.MKETY_OPS_AUTH_ISSUER || 'https://mkety-dzb0ve.eu1.zitadel.cloud' }}
       MKETY_OPS_AUTH_CLIENT_ID: ${{ secrets.MKETY_OPS_AUTH_CLIENT_ID }}
@@ -62,7 +61,7 @@ jobs:
       OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY: ${{ secrets.OCI_OBJECT_STORAGE_SECRET_ACCESS_KEY }}
       OCI_OBJECT_STORAGE_BUCKET: ${{ secrets.OCI_OBJECT_STORAGE_BUCKET }}
     steps:
-      - name: Provision the production app and deploy with sends disabled
+      - name: Provision the production app with audited email controls
         shell: bash
         run: |
           set -euo pipefail
@@ -234,22 +233,19 @@ jobs:
           const present = new Set(current.map(item => item.key));
           const authSecret = secret || (present.has('BETTER_AUTH_SECRET') ? null : randomBytes(48).toString('base64url'));
           if (!authSecret && !present.has('BETTER_AUTH_SECRET')) throw new Error('Could not create the customer auth secret.');
-          const enableOwnerTestSend = process.env.ENABLE_OWNER_TEST_SEND === 'true';
-          if (enableOwnerTestSend) {
-            const ownerTestSecrets = [
-              'ACS_EMAIL_CONNECTION_STRING',
-              'AZURE_ARM_TENANT_ID',
-              'AZURE_ARM_CLIENT_ID',
-              'AZURE_ARM_CLIENT_SECRET',
-              'AZURE_SUBSCRIPTION_ID',
-              'AZURE_RESOURCE_GROUP',
-              'AZURE_EMAIL_SERVICE_NAME',
-              'AZURE_COMMUNICATION_SERVICE_NAME'
-            ];
-            const missing = ownerTestSecrets.filter(key => !process.env[key]?.trim());
-            if (missing.length) throw new Error('Owner test-send preflight blocked; missing configured deployment secrets (' + missing.join(', ') + '). No send flags were changed.');
-            console.log('Owner-only test-send preflight passed; credential values are omitted.');
-          }
+          const ownerTestSecrets = [
+            'ACS_EMAIL_CONNECTION_STRING',
+            'AZURE_ARM_TENANT_ID',
+            'AZURE_ARM_CLIENT_ID',
+            'AZURE_ARM_CLIENT_SECRET',
+            'AZURE_SUBSCRIPTION_ID',
+            'AZURE_RESOURCE_GROUP',
+            'AZURE_EMAIL_SERVICE_NAME',
+            'AZURE_COMMUNICATION_SERVICE_NAME'
+          ];
+          const missingOwnerTestSecrets = ownerTestSecrets.filter(key => !process.env[key]?.trim());
+          if (missingOwnerTestSecrets.length) throw new Error('Email control preflight blocked; missing configured deployment secrets (' + missingOwnerTestSecrets.join(', ') + '). No send flags were changed.');
+          console.log('Azure email credentials and domain-management settings are present; values are omitted.');
           const values = {
             NODE_ENV: 'production',
             HOST: '0.0.0.0',
@@ -258,8 +254,8 @@ jobs:
             CAMPAIGNS_DB_SCHEMA: 'campaigns',
             BETTER_AUTH_URL: 'https://campaign.mkety.com',
             EMAIL_PROVIDER: 'acs-email',
-            EMAIL_TEST_SEND_ENABLED: enableOwnerTestSend ? 'true' : 'false',
-            EMAIL_CAMPAIGN_SEND_ENABLED: 'false',
+            EMAIL_TEST_SEND_ENABLED: 'true',
+            EMAIL_CAMPAIGN_SEND_ENABLED: 'true',
             EMAIL_CAMPAIGN_MAX_RECIPIENTS: '100',
             EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT: '1000',
             EMAIL_PROVIDER_MIN_INTERVAL_MS: '1000',
@@ -315,6 +311,6 @@ jobs:
           console.log('Campaigns Coolify application configured:', appUuid);
           console.log('Production project/environment/server verified; shared mkety-postgres placement matched.');
           console.log('Configured schema: campaigns; customer auth secret: ' + (present.has('BETTER_AUTH_SECRET') ? 'preserved' : 'generated once and stored in Coolify'));
-          console.log('Campaign sends, SMS, and OCI backup are explicitly disabled; owner test-send gate: ' + (enableOwnerTestSend ? 'enabled' : 'disabled') + '.');
+          console.log('Email runtime ceilings are enabled; the Ops database controls govern campaign and owner test sends. Migration 0107 holds the campaign emergency stop ON. SMS and OCI backup remain disabled.');
           console.log('Deployment request queued:', Array.isArray(deployment.deployments) ? deployment.deployments.length : 0);
           NODE

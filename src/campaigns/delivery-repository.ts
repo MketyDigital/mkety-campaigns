@@ -5,7 +5,15 @@ import { buildUnsubscribeUrl, createOpaqueUnsubscribeToken } from "../email/unsu
 
 export interface CampaignDispatchRepository extends CampaignDeliveryRepository {
   queueApproved(campaignId: string, actorUserId: string, maxRecipients: number, actorType?: "user" | "ops"): Promise<number>;
-  getOpsControlStatus?(): Promise<{ emailEmergencyStop: boolean }>;
+  getOpsControlStatus?(): Promise<{
+    emailEmergencyStop: boolean;
+    emailCampaignSendEnabled?: boolean;
+    emailTestSendEnabled?: boolean;
+    smsSendEnabled?: boolean;
+    ociBackupEnabled?: boolean;
+    queuedEmailJobs?: number;
+  }>;
+  setEmailFeatureControls?(controls: { emailCampaignSendEnabled: boolean; emailTestSendEnabled: boolean }, actorUserId: string): Promise<void>;
   setEmergencyStop?(paused: boolean, actorUserId: string): Promise<void>;
   isEmergencyStopActive?(): Promise<boolean>;
   getEmailProviderRouting?(): Promise<EmailProviderRouting>;
@@ -77,11 +85,24 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     return this.getEmailProviderRouting();
   }
 
-  async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean }> {
-    const result = await this.database.query<{ email_emergency_stop: boolean }>(
-      "SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE",
+  async getOpsControlStatus(): Promise<{ emailEmergencyStop: boolean; emailCampaignSendEnabled: boolean; emailTestSendEnabled: boolean; smsSendEnabled: boolean; ociBackupEnabled: boolean; queuedEmailJobs: number }> {
+    const result = await this.database.query<{
+      email_emergency_stop: boolean; email_campaign_send_enabled: boolean; email_test_send_enabled: boolean;
+      sms_send_enabled: boolean; oci_backup_enabled: boolean; queued_email_jobs: number;
+    }>(
+      `SELECT email_emergency_stop,email_campaign_send_enabled,email_test_send_enabled,sms_send_enabled,oci_backup_enabled,
+              (SELECT COUNT(*)::int FROM campaign_jobs cj JOIN campaigns c ON c.id=cj.campaign_id WHERE cj.status='queued' AND c.channel='email') AS queued_email_jobs
+         FROM campaign_ops_controls WHERE id=TRUE`,
     );
-    return { emailEmergencyStop: result.rows[0]?.email_emergency_stop !== false };
+    const row = result.rows[0];
+    return {
+      emailEmergencyStop: row?.email_emergency_stop !== false,
+      emailCampaignSendEnabled: row?.email_campaign_send_enabled === true,
+      emailTestSendEnabled: row?.email_test_send_enabled === true,
+      smsSendEnabled: row?.sms_send_enabled === true,
+      ociBackupEnabled: row?.oci_backup_enabled === true,
+      queuedEmailJobs: Number(row?.queued_email_jobs ?? 0),
+    };
   }
 
   async isEmergencyStopActive(): Promise<boolean> {
@@ -99,6 +120,30 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
       await client.query(
         "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,$2,$3)",
         [actorUserId, paused ? "email_emergency_stop_enabled" : "email_emergency_stop_disabled", JSON.stringify({ paused })],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async setEmailFeatureControls(controls: { emailCampaignSendEnabled: boolean; emailTestSendEnabled: boolean }, actorUserId: string): Promise<void> {
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO campaign_ops_controls (id,email_campaign_send_enabled,email_test_send_enabled,updated_at,updated_by)
+         VALUES (TRUE,$1,$2,NOW(),$3)
+         ON CONFLICT (id) DO UPDATE SET email_campaign_send_enabled=EXCLUDED.email_campaign_send_enabled,
+           email_test_send_enabled=EXCLUDED.email_test_send_enabled,updated_at=NOW(),updated_by=EXCLUDED.updated_by`,
+        [controls.emailCampaignSendEnabled, controls.emailTestSendEnabled, actorUserId],
+      );
+      await client.query(
+        "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'email_feature_controls_updated',$2)",
+        [actorUserId, JSON.stringify(controls)],
       );
       await client.query("COMMIT");
     } catch (error) {
@@ -170,8 +215,8 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
-      const emergencyStop = await client.query<{ email_emergency_stop: boolean }>("SELECT email_emergency_stop FROM campaign_ops_controls WHERE id=TRUE FOR SHARE");
-      if (emergencyStop.rows[0]?.email_emergency_stop !== false) { await client.query("COMMIT"); return null; }
+      const controls = await client.query<{ email_emergency_stop: boolean; email_campaign_send_enabled: boolean }>("SELECT email_emergency_stop,email_campaign_send_enabled FROM campaign_ops_controls WHERE id=TRUE FOR SHARE");
+      if (controls.rows[0]?.email_emergency_stop !== false || controls.rows[0]?.email_campaign_send_enabled !== true) { await client.query("COMMIT"); return null; }
       await client.query(
         `UPDATE campaign_jobs SET status='cancelled',locked_at=NULL,last_error='Workspace contract is inactive; operator review and explicit requeue are required.'
           WHERE status='queued' AND tenant_id IN (SELECT id FROM tenants WHERE status<>'approved' OR contract_started_at>NOW() OR (expires_at IS NOT NULL AND expires_at<=NOW()))`);
