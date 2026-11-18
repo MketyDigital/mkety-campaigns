@@ -364,6 +364,7 @@ test("approved email delivery queueing requires its explicit runtime gate and MF
   let queued: { id: string; actor: string; limit: number } | undefined;
   const dispatch: CampaignDispatchRepository = {
     async queueApproved(id, actor, limit) { queued = { id, actor, limit }; return 2; },
+    async getOpsControlStatus() { return { emailEmergencyStop: false, emailCampaignSendEnabled: true, emailTestSendEnabled: true, queuedEmailJobs: 0 }; },
     async claimNext() { return null; },
     async markAccepted() {},
     async markUncertain() {},
@@ -387,6 +388,39 @@ test("approved email delivery queueing requires its explicit runtime gate and MF
   assert.equal(response.status, 202);
   assert.deepEqual(queued, { id: "campaign-1", actor: "ops-1", limit: 50 });
   assert.deepEqual(await response.json(), { queued: 2, status: "queued" });
+});
+
+test("MFA Ops can change the audited email feature gates while SMS and backup stay off", async () => {
+  let saved: unknown;
+  const controls = fakeEmailControls({ emailEmergencyStop: true, emailCampaignSendEnabled: true, emailTestSendEnabled: true, queuedEmailJobs: 3 });
+  controls.setEmailFeatureControls = async (value: unknown, actorId: string) => { saved = { value, actorId }; };
+  const operatorAuth = {
+    start: async () => new Response(null, { status: 302 }), callback: async () => new Response(null, { status: 302 }),
+    session: async () => ({ id: "ops-user-id", email: "ops@example.com" }), logout: async () => new Response(null, { status: 302 }),
+  };
+  const testSender: EmailTestSender = {
+    async sendToAccountOwner() { return { provider: "acs-email", acceptedAt: "2026-11-03T00:00:00.000Z" }; },
+    async checkProviderStatus() { return { status: "Running" }; },
+  };
+  const app = createApp(async () => true, { auth: activeSession.auth, resolveTenantSeat: activeSession.resolveTenantSeat, operatorAuth }, undefined, undefined, undefined, undefined, testSender, controls, true);
+  const status = await app.request("/api/ops/system/status");
+  const statusBody = await status.json() as { email: { sendingEnabled: boolean; emergencyStop: boolean; queuedEmailJobs: number }; sms: { enabled: boolean }; ociBackup: { enabled: boolean } };
+  assert.equal(statusBody.email.sendingEnabled, true);
+  assert.equal(statusBody.email.emergencyStop, true);
+  assert.equal(statusBody.email.queuedEmailJobs, 3);
+  assert.equal(statusBody.sms.enabled, false);
+  assert.equal(statusBody.ociBackup.enabled, false);
+  const update = await app.request("/api/ops/system/email-features", {
+    method: "PATCH", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" },
+    body: JSON.stringify({ emailCampaignSendEnabled: false, emailTestSendEnabled: true }),
+  });
+  assert.equal(update.status, 200);
+  assert.deepEqual(saved, { value: { emailCampaignSendEnabled: false, emailTestSendEnabled: true }, actorId: "ops-user-id" });
+  const invalid = await app.request("/api/ops/system/email-features", {
+    method: "PATCH", headers: { origin: "https://campaign.mkety.com", "content-type": "application/json" },
+    body: JSON.stringify({ emailCampaignSendEnabled: true, emailTestSendEnabled: true, smsSendEnabled: true }),
+  });
+  assert.equal(invalid.status, 400);
 });
 
 test("Ops provider routing exposes configured adapters and validates policy mutations", async () => {
@@ -554,7 +588,7 @@ test("email test-send is gated and sends only to the authenticated account addre
     async beginEmailTestSendLog(event) { events.push({ ...event, status: "started" }); return true; },
     async recordEmailTestSendLog(event) { events.push(event); },
   });
-  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender);
+  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender, fakeEmailControls());
   const response = await app.request("/api/tenant/senders/sender-1/test", {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ to: "attacker@example.net", from: "attacker@example.net" }),
   });
@@ -573,7 +607,7 @@ test("email test-send blocks a second request while the previous outcome is unre
     async checkProviderStatus() { return { status: "Running" }; },
   };
   const operations = fakeOperationsService({ async beginEmailTestSendLog() { return false; } });
-  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender);
+  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender, fakeEmailControls());
   const response = await app.request("/api/tenant/senders/sender-1/test", { method: "POST" });
   assert.equal(response.status, 409);
   assert.equal(sendCalls, 0);
@@ -683,6 +717,15 @@ function fakeOperationsService(overrides: Partial<OperationsService> = {}): Oper
     async listEmailTestSendLogs() { return []; },
     ...overrides,
   };
+}
+
+function fakeEmailControls(overrides: Record<string, unknown> = {}) {
+  return {
+    async getOpsControlStatus() { return { emailEmergencyStop: true, emailCampaignSendEnabled: true, emailTestSendEnabled: true, smsSendEnabled: false, ociBackupEnabled: false, queuedEmailJobs: 0, ...overrides }; },
+    async setEmergencyStop() {},
+    async setEmailFeatureControls() {},
+    async isEmergencyStopActive() { return true; },
+  } as unknown as CampaignDispatchRepository;
 }
 
 function fakeCampaignWorkspace(overrides: Partial<CampaignWorkspace> = {}): CampaignWorkspace {

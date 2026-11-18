@@ -161,7 +161,7 @@ jobs:
                 --data-binary "$payload" "$api/applications/$app_uuid/envs" > /dev/null
             }
 
-            upsert_runtime_env EMAIL_CAMPAIGN_SEND_ENABLED false
+            upsert_runtime_env EMAIL_CAMPAIGN_SEND_ENABLED true
             upsert_runtime_env SMS_ENABLED false
             upsert_runtime_env OCI_BACKUP_ENABLED false
             upsert_runtime_env EMAIL_TEST_SEND_ENABLED true
@@ -173,7 +173,7 @@ jobs:
           const envs = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const expected = new Map([
             ['EMAIL_TEST_SEND_ENABLED', 'true'],
-            ['EMAIL_CAMPAIGN_SEND_ENABLED', 'false'],
+            ['EMAIL_CAMPAIGN_SEND_ENABLED', 'true'],
             ['SMS_ENABLED', 'false'],
             ['OCI_BACKUP_ENABLED', 'false'],
           ]);
@@ -183,7 +183,7 @@ jobs:
               throw new Error(`Coolify did not confirm the expected safe gate for ${key}`);
             }
           }
-          process.stdout.write('Verified owner-only test send on; campaign sending, SMS, and OCI backup off.\n');
+          process.stdout.write('Verified email runtime controls on; Ops feature controls and emergency stop govern sending; SMS and OCI backup off.\n');
           NODE
           fi
           env_uuid="$(node --input-type=module - "$RUNNER_TEMP/coolify-envs.json" <<'NODE'

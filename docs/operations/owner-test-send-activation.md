@@ -1,14 +1,15 @@
 # Owner-only email test activation plan
 
-**Goal:** Enable the fixed account-owner email test in the existing Campaigns workspace so MKETY can validate a real verified sender.
+**Goal:** Keep Azure and OCI email features available for Ops-managed testing and controlled campaign delivery in the existing Campaigns workspace.
 
-**Architecture:** Use the existing Coolify deployment workflow and its configured API secrets. Before it changes runtime flags, validate the selected email provider and the matching domain-management credentials from Coolify's variable names without printing values. Enable `EMAIL_TEST_SEND_ENABLED`, force campaign dispatch, SMS, and OCI backup off, and redeploy. The test endpoint uses the verified sender selected by the owner and the signed-in account email; the user initiates the message.
+**Architecture:** Use the existing Coolify deployment workflow and its configured API secrets. Before it changes runtime flags, validate the ACS connection and Azure domain-management secret group without printing values. Runtime email ceilings are enabled, while PostgreSQL Ops controls govern email campaigns and owner test sends. Migration 0107 enables those email controls but starts the global emergency stop ON, so no queued job can start until an MFA-enabled Ops user explicitly clears it. SMS dispatch and OCI backup remain off.
 
 **Constraints:**
-- Do not enable `EMAIL_CAMPAIGN_SEND_ENABLED`, SMS, or OCI backup.
+- Keep `SMS_ENABLED` and `OCI_BACKUP_ENABLED` false.
 - Do not accept arbitrary test recipients or From addresses.
 - Never print Coolify token, credentials, database URLs, or email addresses in workflow logs.
-- Require complete provider and domain-management variable entries before enabling the test route.
-- Disable the test-send gate after the owner confirms the inbox check.
+- Require complete provider and domain-management variable entries before deployment.
+- Ops can disable email campaign sending and owner test sends independently. The global emergency stop remains a separate immediate hold.
+- SMS campaign delivery and OCI backup have no operational worker in this release, so Ops cannot activate them from the console.
 
-**Verification:** CI must pass. The Coolify workflow must report only provider name, credential-group completeness, and safe gate states. Confirm deployment health/readiness; the owner confirms sender readiness and initiates the single fixed test from the signed-in workspace account.
+**Verification:** The owner confirmed the Azure test email was received. CI and deployment health/readiness must pass for this release. Ops exposes separately audited campaign/test switches and an emergency-stop control; clearing the stop warns that existing queued jobs may start immediately. Provider acceptance alone does not establish inbox delivery. SMS and OCI backup stay hard-off because their campaign/backup workers are not implemented.

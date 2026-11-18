@@ -11,15 +11,15 @@ const configured = {
   MKETY_OPS_AUTH_CLIENT_ID: "campaigns-ops-client",
   MKETY_OPS_ALLOWED_EMAIL: "hello@mkety.com",
   MKETY_OPS_AUTH_CALLBACK_URL: "https://campaign.mkety.com/api/ops/auth/callback",
-  EMAIL_CAMPAIGN_SEND_ENABLED: "false",
-  EMAIL_TEST_SEND_ENABLED: "false",
+  EMAIL_CAMPAIGN_SEND_ENABLED: "true",
+  EMAIL_TEST_SEND_ENABLED: "true",
   SMS_ENABLED: "false",
   OCI_BACKUP_ENABLED: "false",
   EMAIL_CAMPAIGN_MAX_RECIPIENTS: "1",
   EMAIL_CAMPAIGN_DAILY_RECIPIENT_LIMIT: "100",
 };
 
-test("release preflight accepts the shared mkety database with isolated tables and safety gates off", () => {
+test("release preflight accepts isolated deployment with Ops-gated email and unsupported channels off", () => {
   assert.deepEqual(checkReleaseEnvironment(configured), []);
 });
 
@@ -43,8 +43,12 @@ test("release preflight requires valid MKETY Ops OIDC configuration", () => {
   assert.match(checkReleaseEnvironment({ ...configured, MKETY_OPS_AUTH_CALLBACK_URL: "https://campaign.mkety.com/wrong" }).join(" "), /MKETY_OPS_AUTH_CALLBACK_URL/i);
 });
 
-test("release preflight rejects enabled or absent delivery gates", () => {
-  for (const key of ["EMAIL_CAMPAIGN_SEND_ENABLED", "EMAIL_TEST_SEND_ENABLED", "SMS_ENABLED", "OCI_BACKUP_ENABLED"]) {
+test("release preflight requires email runtime ceilings and keeps SMS and OCI backup off", () => {
+  for (const key of ["EMAIL_CAMPAIGN_SEND_ENABLED", "EMAIL_TEST_SEND_ENABLED"]) {
+    assert.match(checkReleaseEnvironment({ ...configured, [key]: "false" }).join(" "), new RegExp(key));
+    assert.match(checkReleaseEnvironment({ ...configured, [key]: undefined }).join(" "), new RegExp(key));
+  }
+  for (const key of ["SMS_ENABLED", "OCI_BACKUP_ENABLED"]) {
     assert.match(checkReleaseEnvironment({ ...configured, [key]: "true" }).join(" "), new RegExp(key));
     assert.match(checkReleaseEnvironment({ ...configured, [key]: undefined }).join(" "), new RegExp(key));
   }

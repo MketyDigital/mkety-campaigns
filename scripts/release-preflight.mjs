@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
-const DISABLED_FLAGS = ["EMAIL_CAMPAIGN_SEND_ENABLED", "EMAIL_TEST_SEND_ENABLED", "SMS_ENABLED", "OCI_BACKUP_ENABLED"];
+const ENABLED_EMAIL_FLAGS = ["EMAIL_CAMPAIGN_SEND_ENABLED", "EMAIL_TEST_SEND_ENABLED"];
+const DISABLED_FLAGS = ["SMS_ENABLED", "OCI_BACKUP_ENABLED"];
 
 /**
  * Read-only configuration preflight. Never print environment values or secrets.
@@ -53,6 +54,9 @@ export function checkReleaseEnvironment(env) {
   const secret = env.BETTER_AUTH_SECRET;
   if (!secret || secret.length < 32 || /^(.)\1+$/.test(secret) || /^(change-me|placeholder|example)/i.test(secret)) {
     errors.push("BETTER_AUTH_SECRET must be a non-placeholder value of at least 32 characters");
+  }
+  for (const key of ENABLED_EMAIL_FLAGS) {
+    if (env[key] !== "true") errors.push(`${key} must be explicitly true; Ops database gates and the email emergency stop control actual sending`);
   }
   for (const key of DISABLED_FLAGS) {
     if (env[key] !== "false") errors.push(`${key} must be explicitly false before release`);
