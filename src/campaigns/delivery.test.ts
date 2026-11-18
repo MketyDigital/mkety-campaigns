@@ -36,12 +36,13 @@ test("campaign worker sends a claimed job with stable idempotency and records ac
 test("campaign worker marks provider errors uncertain and never retries automatically", async () => {
   const repository = fakeRepository();
   let attempts = 0;
-  const provider = fakeProvider({ async send() { attempts++; throw new Error("connection reset"); } });
+  const provider = fakeProvider({ async send() { attempts++; throw new EmailProviderRequestError("acs-email", 503, "ServiceUnavailable", "unknown", "req-safe-1"); } });
   const worker = createEmailCampaignWorker(repository, provider, true);
   assert.equal(await worker.processOne(), true);
   assert.equal(await worker.processOne(), false);
   assert.equal(attempts, 1);
   assert.equal(repository.uncertain[0]?.id, job.id);
+  assert.deepEqual(repository.uncertain[0]?.evidence, { provider: "acs-email", disposition: "unknown", httpStatus: 503, providerCode: "ServiceUnavailable", providerRequestId: "req-safe-1" });
 });
 
 test("campaign worker falls back once only after a definitive provider rejection", async () => {
@@ -103,12 +104,12 @@ function fakeProvider(overrides: Partial<EmailProvider> = {}): EmailProvider {
 
 function fakeRepository(overrides: Partial<CampaignDeliveryRepository> = {}) {
   const accepted: Array<{ id: string; providerMessageId?: string }> = [];
-  const uncertain: Array<{ id: string; error: string }> = [];
+  const uncertain: Array<{ id: string; error: string; evidence?: import("./delivery.js").CampaignDeliveryFailureEvidence }> = [];
   let claimed = false;
   const repository: CampaignDeliveryRepository = {
     async claimNext() { if (claimed) return null; claimed = true; return job; },
     async markAccepted(id, result) { accepted.push({ id, providerMessageId: result.providerMessageId }); },
-    async markUncertain(id, error) { uncertain.push({ id, error }); },
+    async markUncertain(id, error, evidence) { uncertain.push({ id, error, evidence }); },
     ...overrides,
   };
   return Object.assign(repository, { accepted, uncertain });

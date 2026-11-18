@@ -3,6 +3,7 @@ import type { EmailProvider, EmailSendResult } from "./providers.js";
 
 export interface EmailTestSender {
   sendToAccountOwner(tenantId: string, senderId: string, accountEmail: string): Promise<EmailSendResult>;
+  checkProviderStatus(provider: EmailSendResult["provider"], operationId: string): Promise<{ status: string; errorCode?: string }>;
 }
 
 export class TestSenderUnavailableError extends Error {
@@ -12,6 +13,11 @@ export class TestSenderUnavailableError extends Error {
 export function createEmailTestSender(repository: SenderRepository, providers: EmailProvider | EmailProvider[]): EmailTestSender {
   const configuredProviders = Array.isArray(providers) ? providers : [providers];
   return {
+    async checkProviderStatus(providerName, operationId) {
+      const provider = configuredProviders.find((item) => item.name === providerName);
+      if (!provider?.getSendStatus) throw new TestSenderUnavailableError();
+      return provider.getSendStatus(operationId);
+    },
     async sendToAccountOwner(tenantId, senderId, accountEmail) {
       const sender = await repository.get(tenantId, senderId);
       const provider = sender ? configuredProviders.find((item) => item.name === sender.provider) : undefined;

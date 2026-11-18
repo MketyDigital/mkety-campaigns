@@ -25,6 +25,22 @@ export type OpsDomainFailure = {
   providerRequestId: string | null;
   providerErrorAt: string | null;
 };
+export type EmailTestSendLogEvent = {
+  attemptId: string;
+  tenantId: string;
+  senderId: string;
+  provider: "acs-email" | "oci-email-delivery";
+  status: "started" | "accepted" | "rejected" | "unknown" | "running" | "succeeded" | "failed";
+  httpStatus?: number;
+  providerCode?: string;
+  providerRequestId?: string;
+  providerMessageId?: string;
+};
+export type OpsEmailTestSendLog = EmailTestSendLogEvent & { createdAt: string };
+export type OpsCampaignDeliveryError = {
+  jobId: string; tenantId: string; campaignId: string; provider: "acs-email" | "oci-email-delivery";
+  disposition: "rejected" | "unknown"; httpStatus?: number; providerCode?: string; providerRequestId?: string; createdAt: string;
+};
 
 export interface OperationsService {
   createTenantInvite(tenantName: string, email: string, settings?: WorkspaceProvisioning, actorId?: string): Promise<{ inviteUrl: string }>;
@@ -37,6 +53,11 @@ export interface OperationsService {
   revokeInvitation?(id: string, actorId: string): Promise<boolean>;
   listDomainFailures?(): Promise<OpsDomainFailure[]>;
   recordDomainProviderRetry?(id: string, fromProvider: string, toProvider: string, outcome: string, actorId: string): Promise<void>;
+  recordEmailTestSendLog?(event: EmailTestSendLogEvent): Promise<void>;
+  beginEmailTestSendLog?(event: Omit<EmailTestSendLogEvent, "status">): Promise<boolean>;
+  listEmailTestSendLogs?(): Promise<OpsEmailTestSendLog[]>;
+  getEmailTestSendLog?(attemptId: string): Promise<OpsEmailTestSendLog | null>;
+  listCampaignDeliveryErrors?(): Promise<OpsCampaignDeliveryError[]>;
 }
 
 type InvitationRow = { id: string; tenant_id: string; email: string };
@@ -194,6 +215,101 @@ export class PostgresOperationsService implements OperationsService {
       "INSERT INTO campaign_ops_audit (actor_user_id,action,details_json) VALUES ($1,'email_domain_provider_retry',$2)",
       [actorId, JSON.stringify({ domainId: id, fromProvider, toProvider, outcome: safeOutcome })],
     );
+  }
+
+  async recordEmailTestSendLog(event: EmailTestSendLogEvent): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(event.attemptId) || !/^[A-Za-z0-9_-]{1,128}$/.test(event.tenantId) || !/^[A-Za-z0-9_-]{1,128}$/.test(event.senderId)) throw new Error("Invalid test-send log reference");
+    if (event.provider !== "acs-email" && event.provider !== "oci-email-delivery") throw new Error("Invalid email provider");
+    if (!["started", "accepted", "rejected", "unknown", "running", "succeeded", "failed"].includes(event.status)) throw new Error("Invalid test-send status");
+    const safe = {
+      attemptId: event.attemptId,
+      tenantId: event.tenantId,
+      senderId: event.senderId,
+      provider: event.provider,
+      status: event.status,
+      ...(Number.isInteger(event.httpStatus) && event.httpStatus! >= 100 && event.httpStatus! <= 599 ? { httpStatus: event.httpStatus } : {}),
+      ...(event.providerCode && /^[A-Za-z0-9_.-]{1,80}$/.test(event.providerCode) ? { providerCode: event.providerCode } : {}),
+      ...(event.providerRequestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(event.providerRequestId) ? { providerRequestId: event.providerRequestId } : {}),
+      ...(event.providerMessageId && /^[A-Za-z0-9_.:-]{1,128}$/.test(event.providerMessageId) ? { providerMessageId: event.providerMessageId } : {}),
+    };
+    await this.database.query(
+      "INSERT INTO campaign_ops_audit (action,details_json) VALUES ('email_test_send_event',$1)",
+      [JSON.stringify(safe)],
+    );
+  }
+
+  async beginEmailTestSendLog(event: Omit<EmailTestSendLogEvent, "status">): Promise<boolean> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(event.attemptId) || !/^[A-Za-z0-9_-]{1,128}$/.test(event.tenantId) || !/^[A-Za-z0-9_-]{1,128}$/.test(event.senderId)) throw new Error("Invalid test-send log reference");
+    if (event.provider !== "acs-email" && event.provider !== "oci-email-delivery") throw new Error("Invalid email provider");
+    const client = await this.database.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`email-test:${event.tenantId}:${event.senderId}`]);
+      const latest = await client.query<{ details_json: Record<string, unknown>; created_at: Date | string }>(
+        `SELECT details_json,created_at FROM campaign_ops_audit
+          WHERE action='email_test_send_event' AND details_json->>'tenantId'=$1 AND details_json->>'senderId'=$2
+          ORDER BY created_at DESC LIMIT 1`, [event.tenantId, event.senderId],
+      );
+      const previous = latest.rows[0];
+      if (previous) {
+        const status = previous.details_json.status;
+        const ageMs = Date.now() - new Date(previous.created_at).getTime();
+        const unresolved = ["started", "accepted", "running", "unknown"].includes(String(status));
+        const recent = ageMs < 60_000;
+        if (unresolved || recent) { await client.query("COMMIT"); return false; }
+      }
+      const details = { attemptId: event.attemptId, tenantId: event.tenantId, senderId: event.senderId, provider: event.provider, status: "started" };
+      await client.query("INSERT INTO campaign_ops_audit (action,details_json) VALUES ('email_test_send_event',$1)", [JSON.stringify(details)]);
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listEmailTestSendLogs(): Promise<OpsEmailTestSendLog[]> {
+    const result = await this.database.query<any>(
+      `SELECT details_json,created_at FROM (
+         SELECT DISTINCT ON (details_json->>'attemptId') details_json,created_at
+           FROM campaign_ops_audit WHERE action='email_test_send_event'
+          ORDER BY details_json->>'attemptId',created_at DESC
+       ) latest ORDER BY created_at DESC LIMIT 100`,
+    );
+    return result.rows.flatMap((row: any) => {
+      const value = typeof row.details_json === "string" ? JSON.parse(row.details_json) : row.details_json;
+      if (!value || typeof value.attemptId !== "string" || typeof value.tenantId !== "string" || typeof value.senderId !== "string") return [];
+      return [{ ...value, createdAt: new Date(row.created_at).toISOString() } as OpsEmailTestSendLog];
+    });
+  }
+
+  async getEmailTestSendLog(attemptId: string): Promise<OpsEmailTestSendLog | null> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(attemptId)) return null;
+    const result = await this.database.query<any>(
+      `SELECT details_json,created_at FROM campaign_ops_audit
+        WHERE action='email_test_send_event' AND details_json->>'attemptId'=$1
+        ORDER BY created_at DESC LIMIT 1`, [attemptId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const value = typeof row.details_json === "string" ? JSON.parse(row.details_json) : row.details_json;
+    if (!value || typeof value.attemptId !== "string" || typeof value.tenantId !== "string" || typeof value.senderId !== "string") return null;
+    return { ...value, createdAt: new Date(row.created_at).toISOString() } as OpsEmailTestSendLog;
+  }
+
+  async listCampaignDeliveryErrors(): Promise<OpsCampaignDeliveryError[]> {
+    const result = await this.database.query<any>(
+      `SELECT details_json,created_at FROM campaign_ops_audit
+        WHERE action='campaign_delivery_provider_error' ORDER BY created_at DESC LIMIT 100`,
+    );
+    return result.rows.flatMap((row: any) => {
+      const value = typeof row.details_json === "string" ? JSON.parse(row.details_json) : row.details_json;
+      if (!value || typeof value.jobId !== "string" || typeof value.tenantId !== "string" || typeof value.campaignId !== "string") return [];
+      if (value.provider !== "acs-email" && value.provider !== "oci-email-delivery") return [];
+      return [{ ...value, createdAt: new Date(row.created_at).toISOString() } as OpsCampaignDeliveryError];
+    });
   }
 
   async updateWorkspace(id: string, settings: Partial<WorkspaceControls>, actorId: string): Promise<OpsWorkspace | null> {

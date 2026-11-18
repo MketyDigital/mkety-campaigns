@@ -1,5 +1,5 @@
 import type { PostgresPool } from "./repository.js";
-import type { CampaignDeliveryJob, CampaignDeliveryRepository } from "./delivery.js";
+import type { CampaignDeliveryFailureEvidence, CampaignDeliveryJob, CampaignDeliveryRepository } from "./delivery.js";
 import type { EmailSendResult } from "../email/providers.js";
 import { buildUnsubscribeUrl, createOpaqueUnsubscribeToken } from "../email/unsubscribe.js";
 
@@ -247,7 +247,7 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
     }
   }
 
-  async markUncertain(id: string, reason: string): Promise<void> {
+  async markUncertain(id: string, reason: string, evidence?: CampaignDeliveryFailureEvidence): Promise<void> {
     const client = await this.database.connect();
     try {
       await client.query("BEGIN");
@@ -264,6 +264,17 @@ export class PostgresCampaignDispatchRepository implements CampaignDispatchRepos
             WHERE c.id = $3
            ON CONFLICT (idempotency_key) DO NOTHING`,
           [crypto.randomUUID(), uncertain.tenant_id, uncertain.campaign_id, uncertain.contact_id, uncertain.idempotency_key, safeReason(reason)]);
+        const safeEvidence = evidence && (evidence.provider === "acs-email" || evidence.provider === "oci-email-delivery") ? {
+          jobId: id, tenantId: uncertain.tenant_id, campaignId: uncertain.campaign_id,
+          provider: evidence.provider, disposition: evidence.disposition === "rejected" ? "rejected" : "unknown",
+          ...(Number.isInteger(evidence.httpStatus) && evidence.httpStatus! >= 100 && evidence.httpStatus! <= 599 ? { httpStatus: evidence.httpStatus } : {}),
+          ...(evidence.providerCode && /^[A-Za-z0-9_.-]{1,80}$/.test(evidence.providerCode) ? { providerCode: evidence.providerCode } : {}),
+          ...(evidence.providerRequestId && /^[A-Za-z0-9_.:-]{1,128}$/.test(evidence.providerRequestId) ? { providerRequestId: evidence.providerRequestId } : {}),
+        } : undefined;
+        if (safeEvidence) await client.query(
+          "INSERT INTO campaign_ops_audit (action,details_json) VALUES ('campaign_delivery_provider_error',$1)",
+          [JSON.stringify(safeEvidence)],
+        );
         await finalizeCampaigns(client, uncertain.campaign_id);
       }
       await client.query("COMMIT");

@@ -120,7 +120,7 @@ test("tenant context comes from the authenticated seat, not a request parameter"
   });
   const response = await app.request("/api/tenant/me?tenantId=tenant-attacker");
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { tenantId: "tenant-authorized", userId: "user-1" });
+  assert.deepEqual(await response.json(), { tenantId: "tenant-authorized", userId: "user-1", accountEmail: null });
 });
 
 test("state-changing workspace requests reject an untrusted browser origin", async () => {
@@ -263,6 +263,21 @@ test("workspace dashboard authorizes the active tenant seat and links core tools
   const anonymous = await createApp().request("/app", { redirect: "manual" });
   assert.equal(anonymous.status, 302);
   assert.equal(anonymous.headers.get("location"), "/login");
+});
+
+test("workspace pages show account status and navigation, and expose only the signed-in email", async () => {
+  const app = createApp(async () => true, activeSession);
+  const page = await app.request("/app/senders");
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.match(html, /aria-label="Workspace navigation"/);
+  assert.match(html, /href="\/app\/domains"/);
+  assert.match(html, /href="\/app\/campaigns"/);
+  assert.match(html, /Checking sign-in…/);
+  const identity = await app.request("/api/tenant/me");
+  assert.deepEqual(await identity.json(), {
+    tenantId: "tenant-authorized", userId: "user-1", accountEmail: "owner@example.com",
+  });
 });
 
 test("sender identity page explains readiness and owner-only test sending", async () => {
@@ -530,16 +545,39 @@ test("sender provisioning refresh is scoped to the active tenant", async () => {
 
 test("email test-send is gated and sends only to the authenticated account address", async () => {
   let sentTo: string | undefined;
-  const testSender: EmailTestSender = { async sendToAccountOwner(_tenantId, _senderId, email) { sentTo = email; return { provider: "acs-email", acceptedAt: "2026-11-03T00:00:00.000Z" }; } };
-  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), fakeOperationsService(), fakeSenderService(), testSender);
+  const events: unknown[] = [];
+  const testSender: EmailTestSender = {
+    async sendToAccountOwner(_tenantId, _senderId, email) { sentTo = email; return { provider: "acs-email", acceptedAt: "2026-11-03T00:00:00.000Z" }; },
+    async checkProviderStatus() { return { status: "Running" }; },
+  };
+  const operations = fakeOperationsService({
+    async beginEmailTestSendLog(event) { events.push({ ...event, status: "started" }); return true; },
+    async recordEmailTestSendLog(event) { events.push(event); },
+  });
+  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender);
   const response = await app.request("/api/tenant/senders/sender-1/test", {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ to: "attacker@example.net", from: "attacker@example.net" }),
   });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   assert.equal(sentTo, "owner@example.com");
+  assert.deepEqual(events.map((item) => (item as { status: string }).status), ["started", "accepted"]);
 
   const disabled = await createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), fakeOperationsService(), fakeSenderService()).request("/api/tenant/senders/sender-1/test", { method: "POST" });
   assert.equal(disabled.status, 503);
+});
+
+test("email test-send blocks a second request while the previous outcome is unresolved", async () => {
+  let sendCalls = 0;
+  const testSender: EmailTestSender = {
+    async sendToAccountOwner() { sendCalls += 1; return { provider: "acs-email", acceptedAt: "2026-11-03T00:00:00.000Z" }; },
+    async checkProviderStatus() { return { status: "Running" }; },
+  };
+  const operations = fakeOperationsService({ async beginEmailTestSendLog() { return false; } });
+  const app = createApp(async () => true, activeSession, fakeDomainService(), fakeCampaignWorkspace(), operations, fakeSenderService(), testSender);
+  const response = await app.request("/api/tenant/senders/sender-1/test", { method: "POST" });
+  assert.equal(response.status, 409);
+  assert.equal(sendCalls, 0);
+  assert.deepEqual(await response.json(), { error: "email_test_recent_attempt_unresolved", retryBlocked: true, message: "A recent send attempt is still unresolved. Check Ops logs before trying again." });
 });
 
 test("CSV import validates all rows before saving contacts", async () => {
@@ -640,6 +678,9 @@ function fakeOperationsService(overrides: Partial<OperationsService> = {}): Oper
   return {
     async createTenantInvite() { return { inviteUrl: "https://campaign.mkety.com/invite/accept?token=test" }; },
     async acceptInvite() { return true; },
+    async recordEmailTestSendLog() {},
+    async beginEmailTestSendLog() { return true; },
+    async listEmailTestSendLogs() { return []; },
     ...overrides,
   };
 }
@@ -708,4 +749,31 @@ test("Ops dashboard renders workspace controls with syntactically valid client c
   const script = html.match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(script, "Ops dashboard should contain its UI script");
   assert.doesNotThrow(() => new Script(script[1]));
+});
+
+test("Ops can refresh an Azure test-send operation and logs the provider result", async () => {
+  let statusChecked = "";
+  const events: Array<{ status: string; providerCode?: string }> = [];
+  const operations = fakeOperationsService({
+    async getEmailTestSendLog(attemptId) {
+      return { attemptId, tenantId: "tenant-authorized", senderId: "sender-1", provider: "acs-email", status: "accepted", providerMessageId: "8540c0de-899f-5cce-acb5-3ec493af3800", createdAt: "2026-11-18T12:00:00.000Z" };
+    },
+    async recordEmailTestSendLog(event) { events.push(event); },
+  });
+  const testSender: EmailTestSender = {
+    async sendToAccountOwner() { throw new Error("not used"); },
+    async checkProviderStatus(_provider, operationId) { statusChecked = operationId; return { status: "Failed", errorCode: "EmailDropped" }; },
+  };
+  const operatorAuth = {
+    start: async () => new Response(null, { status: 302 }),
+    callback: async () => new Response(null, { status: 302 }),
+    session: async () => ({ id: "ops-user-id", email: "ops@example.com" }),
+    logout: async () => new Response(null, { status: 302 }),
+  };
+  const app = createApp(async () => true, { auth: activeSession.auth, resolveTenantSeat: activeSession.resolveTenantSeat, operatorAuth }, undefined, undefined, operations, undefined, testSender);
+  const response = await app.request("/api/ops/email-test-sends/attempt-1/refresh", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.equal(response.status, 200);
+  assert.equal(statusChecked, "8540c0de-899f-5cce-acb5-3ec493af3800");
+  assert.deepEqual(await response.json(), { attemptId: "attempt-1", provider: "acs-email", status: "failed", providerCode: "EmailDropped" });
+  assert.deepEqual(events.map((event) => ({ status: event.status, providerCode: event.providerCode })), [{ status: "failed", providerCode: "EmailDropped" }]);
 });

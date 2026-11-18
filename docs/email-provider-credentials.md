@@ -77,8 +77,9 @@ This test path can run in the existing Campaigns workspace. It is separate from 
 3. Add a domain or subdomain you control in **Sender domains**, publish the DNS records shown in the workspace, and refresh verification until the domain is ready.
 4. In **Sender addresses**, create an address under that ready domain and refresh until its status reads `ready`.
 5. Select **Send test email to your signed-in account**. The app sends a fixed message from that ready sender to the signed-in account email. It ignores caller-supplied recipients and From addresses.
-6. Check the inbox and provider status. An HTTP success means the provider accepted the message; it does not guarantee mailbox delivery.
-7. Set `EMAIL_TEST_SEND_ENABLED=false` after confirming the test. This path never queues a campaign.
+6. Check the inbox and the Ops **Owner test-send logs**. The app records a safe attempt ID, provider, outcome, HTTP status/error code, and provider request/operation ID; it does not store recipients, message content, or credentials. Azure sends are asynchronous: Ops can query the Azure operation status. `Succeeded` means Azure completed its send operation, not that the recipient mailbox accepted the message. Use Azure Email Status Update operational logs or authenticated Event Grid delivery events to confirm final delivery.
+7. For campaign jobs, Ops also shows provider rejection/unknown outcomes with the provider, HTTP status, safe provider error code, and request ID. Timeouts and ambiguous responses remain blocked from automatic retry or fallback.
+8. Set `EMAIL_TEST_SEND_ENABLED=false` after confirming the test. This path never queues a campaign.
 
 The test action is unavailable while the sender is pending, the provider is unconfigured, the session is not authorized, or the runtime flag is false. It does not enable campaign dispatch.
 

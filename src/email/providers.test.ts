@@ -21,20 +21,21 @@ const message: CampaignEmail = {
 
 test("ACS provider sends a signed request and returns the accepted operation", async () => {
   let captured: Request | undefined;
+  const operationId = "8540c0de-899f-5cce-acb5-3ec493af3800";
   const provider = createAcsEmailProvider({
     connectionString: "endpoint=https://example.communication.azure.com/;accesskey=YWJjZA==",
     fetcher: async (input, init) => {
       captured = new Request(input, init);
-      return new Response(JSON.stringify({ id: "op-123", status: "Running" }), {
+      return new Response(JSON.stringify({ id: operationId, status: "Running" }), {
         status: 202,
-        headers: { "Operation-Location": "https://example.communication.azure.com/emails/operations/op-123" },
+        headers: { "Operation-Location": `https://example.communication.azure.com/emails/operations/${operationId}` },
       });
     },
   });
 
   const result = await provider.send(message);
   assert.equal(result.provider, "acs-email");
-  assert.equal(result.providerMessageId, "op-123");
+  assert.equal(result.providerMessageId, operationId);
   assert.ok(captured);
   assert.match(captured.headers.get("authorization") ?? "", /^HMAC-SHA256 /);
   assert.equal(captured.headers.get("operation-id")?.length, 36);
@@ -52,6 +53,23 @@ test("ACS provider sends a signed request and returns the accepted operation", a
   const key = await crypto.subtle.importKey("raw", Uint8Array.from(atob("YWJjZA=="), (char) => char.charCodeAt(0)), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
   const signature = captured.headers.get("authorization")?.split("Signature=")[1] ?? "";
   assert.equal(await crypto.subtle.verify("HMAC", key, Uint8Array.from(atob(signature), (char) => char.charCodeAt(0)), new TextEncoder().encode(stringToSign)), true);
+});
+
+test("ACS provider can retrieve the asynchronous send result and safe error code", async () => {
+  let captured: Request | undefined;
+  const operationId = "8540c0de-899f-5cce-acb5-3ec493af3800";
+  const provider = createAcsEmailProvider({
+    connectionString: "endpoint=https://example.communication.azure.com/;accesskey=YWJjZA==",
+    fetcher: async (input, init) => {
+      captured = new Request(input, init);
+      return Response.json({ id: operationId, status: "Failed", error: { code: "EmailDropped", message: "private provider detail" } });
+    },
+  });
+  const result = await provider.getSendStatus?.(operationId);
+  assert.deepEqual(result, { status: "Failed", errorCode: "EmailDropped" });
+  assert.equal(captured?.method, "GET");
+  assert.equal(new URL(captured!.url).pathname, `/emails/operations/${operationId}`);
+  assert.match(captured?.headers.get("authorization") ?? "", /^HMAC-SHA256 /);
 });
 
 test("OCI provider signs and submits through the HTTPS endpoint", async () => {

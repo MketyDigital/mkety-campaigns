@@ -16,12 +16,20 @@ export type CampaignDeliveryJob = {
   unsubscribeUrl?: string;
 };
 
+export type CampaignDeliveryFailureEvidence = {
+  provider: EmailSendResult["provider"];
+  disposition: "rejected" | "unknown";
+  httpStatus?: number;
+  providerCode?: string;
+  providerRequestId?: string;
+};
+
 export interface CampaignDeliveryRepository {
   /** Claims a single due job and rechecks consent/suppression immediately before returning it. */
   claimNext(): Promise<CampaignDeliveryJob | null>;
   markAccepted(id: string, result: EmailSendResult): Promise<void>;
   /** Provider timeouts and local persistence failures are ambiguous; they must not be auto-retried. */
-  markUncertain(id: string, reason: string): Promise<void>;
+  markUncertain(id: string, reason: string, evidence?: CampaignDeliveryFailureEvidence): Promise<void>;
   isEmergencyStopActive?(): Promise<boolean>;
 }
 
@@ -63,6 +71,7 @@ export function createEmailCampaignWorker(
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
           } } : {}),
         };
+      let attemptedProvider = provider;
       try {
         let result: EmailSendResult;
         try {
@@ -73,15 +82,27 @@ export function createEmailCampaignWorker(
             : undefined;
           if (!(error instanceof EmailProviderRequestError) || error.disposition !== "rejected" || !fallback) throw error;
           if (repository.isEmergencyStopActive && await repository.isEmergencyStopActive()) throw new Error("Email emergency stop became active before fallback.");
+          attemptedProvider = fallback;
           result = await fallback.send(message);
         }
         await repository.markAccepted(job.id, result);
-      } catch {
-        try { await repository.markUncertain(job.id, UNCERTAIN_REASON); } catch { /* Lease recovery records this as uncertain. */ }
+      } catch (error) {
+        const providerError = error instanceof EmailProviderRequestError ? error : undefined;
+        const evidence: CampaignDeliveryFailureEvidence = {
+          provider: attemptedProvider.name,
+          disposition: providerError?.disposition ?? "unknown",
+          ...(providerError ? { httpStatus: providerError.status, providerCode: providerError.providerCode, ...(providerError.requestId ? { providerRequestId: providerError.requestId } : {}) } : { providerCode: safeErrorName(error) }),
+        };
+        try { await repository.markUncertain(job.id, UNCERTAIN_REASON, evidence); } catch { /* Lease recovery records this as uncertain. */ }
       }
       return true;
     },
   };
+}
+
+function safeErrorName(error: unknown): string {
+  const name = error instanceof Error ? error.name : "ProviderError";
+  return /^[A-Za-z0-9_.-]{1,80}$/.test(name) ? name : "ProviderError";
 }
 
 function escapeAttribute(value: string): string {

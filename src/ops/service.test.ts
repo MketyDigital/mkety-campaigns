@@ -101,3 +101,66 @@ test("Ops tenant overview rejects unapproved reporting windows",async()=>{
   await assert.rejects(()=>service.getWorkspaceOverview?.("tenant-1",365),/reporting window/i);
   assert.equal(calls.length,0);
 });
+
+test("Ops test-send logs retain sanitized provider evidence without recipient or message data",async()=>{
+  const calls:Call[]=[];
+  const service=new PostgresOperationsService(fakePool(calls,[],[[{
+    details_json:{attemptId:"attempt-1",tenantId:"tenant-1",senderId:"sender-1",provider:"acs-email",status:"rejected",httpStatus:401,providerCode:"Unauthorized",providerRequestId:"req-123"},
+    created_at:"2026-11-18T12:00:00.000Z",
+  }]]),"https://campaign.mkety.com");
+  await service.recordEmailTestSendLog?.({
+    attemptId:"attempt-1",tenantId:"tenant-1",senderId:"sender-1",provider:"acs-email",status:"rejected",
+    httpStatus:401,providerCode:"Unauthorized",providerRequestId:"req-123",
+    providerMessageId:"https://secret.example/operation", // Not accepted by the safe identifier format.
+  });
+  const insert=calls[0];
+  assert.match(insert?.sql??"",/campaign_ops_audit/);
+  const stored=String(insert?.params[0]??"");
+  assert.match(stored,/Unauthorized/);
+  assert.doesNotMatch(stored,/secret\.example|recipient|body|subject/i);
+  const logs=await service.listEmailTestSendLogs?.();
+  assert.equal(logs?.[0]?.providerRequestId,"req-123");
+  assert.equal(logs?.[0]?.createdAt,"2026-11-18T12:00:00.000Z");
+  assert.doesNotMatch(JSON.stringify(logs),/secret\.example|@example/);
+});
+
+test("begin email test-send takes an advisory lock and writes one started event", async () => {
+  const calls: Call[] = [];
+  const service = new PostgresOperationsService(fakePool(calls), "https://campaign.mkety.com");
+  const started = await service.beginEmailTestSendLog?.({
+    attemptId: "attempt-2", tenantId: "tenant-1", senderId: "sender-1", provider: "acs-email",
+  });
+  assert.equal(started, true);
+  assert.match(calls[1]?.sql ?? "", /pg_advisory_xact_lock/);
+  const insert = calls.find((call) => call.sql.includes("INSERT INTO campaign_ops_audit"));
+  assert.ok(insert);
+  assert.match(String(insert.params[0]), /"status":"started"/);
+  assert.doesNotMatch(String(insert.params[0]), /@|body|subject/i);
+  assert.equal(calls.at(-1)?.sql, "COMMIT");
+});
+
+test("begin email test-send refuses to send again while the last provider outcome is unresolved", async () => {
+  const calls: Call[] = [];
+  const service = new PostgresOperationsService(fakePool(calls, [], [[], [{
+    details_json: { status: "unknown" }, created_at: new Date().toISOString(),
+  }]]), "https://campaign.mkety.com");
+  const started = await service.beginEmailTestSendLog?.({
+    attemptId: "attempt-3", tenantId: "tenant-1", senderId: "sender-1", provider: "acs-email",
+  });
+  assert.equal(started, false);
+  assert.equal(calls.some((call) => call.sql.includes("INSERT INTO campaign_ops_audit")), false);
+  assert.equal(calls.at(-1)?.sql, "COMMIT");
+});
+
+test("Ops campaign error logs expose provider diagnostics without message or recipient data", async () => {
+  const calls: Call[] = [];
+  const service = new PostgresOperationsService(fakePool(calls, [{
+    details_json: { jobId: "job-1", tenantId: "tenant-1", campaignId: "campaign-1", provider: "acs-email", disposition: "rejected", httpStatus: 401, providerCode: "Unauthorized", providerRequestId: "req-123" },
+    created_at: "2026-11-18T12:00:00.000Z",
+  }]), "https://campaign.mkety.com");
+  const errors = await service.listCampaignDeliveryErrors?.();
+  assert.equal(errors?.[0]?.providerCode, "Unauthorized");
+  assert.equal(errors?.[0]?.providerRequestId, "req-123");
+  assert.match(calls[0]?.sql ?? "", /campaign_delivery_provider_error/);
+  assert.doesNotMatch(JSON.stringify(errors), /@example|subject|message body/i);
+});
